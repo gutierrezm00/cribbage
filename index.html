@@ -1,0 +1,2471 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0f3a27">
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<title>Cribbage</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%}
+body{
+  min-height:100vh;color:#f3e7cf;overflow-x:hidden;
+  font:15px/1.4 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f1:#1f6044;--f2:#0f3a27;--f3:#061710;--ink:#2a1406;--hi:#ffe1b0;
+  background:radial-gradient(ellipse at 50% 35%,var(--f1) 0%,var(--f2) 55%,var(--f3) 100%);
+  transition:background .6s;
+  -webkit-user-select:none;user-select:none;
+}
+body::before{ /* felt texture */
+  content:"";position:fixed;inset:0;pointer-events:none;opacity:.16;mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='220' height='220' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+.wrap{position:relative;max-width:1280px;margin:0 auto;padding:18px 16px 40px}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin-bottom:14px}
+h1{margin:0;font:italic 700 30px Georgia,"Times New Roman",serif;color:#f1d48a;letter-spacing:.02em;text-shadow:0 2px 0 #0007}
+h1 span{font-style:normal;font-size:14px;letter-spacing:.3em;color:#cdb98f;margin-left:10px;vertical-align:middle}
+.bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.btn{
+  font:600 13px ui-sans-serif,system-ui,sans-serif;letter-spacing:.04em;color:#2b1b05;cursor:pointer;
+  background:linear-gradient(#f3d88c,#c99a3b);border:1px solid #7a5815;border-radius:999px;padding:7px 15px;
+  box-shadow:inset 0 1px 0 #fff8,0 3px 0 #5c410e,0 6px 12px #0006;transition:transform .08s,box-shadow .08s;
+}
+.btn:active{transform:translateY(3px);box-shadow:inset 0 1px 0 #fff8,0 0 0 #5c410e,0 2px 4px #0006}
+.btn:disabled{filter:grayscale(.7) brightness(.7);cursor:default;transform:none}
+.seg{display:inline-flex;border-radius:999px;box-shadow:0 3px 0 #5c410e,0 6px 12px #0006}
+.seg .btn{box-shadow:inset 0 1px 0 #fff8;border-radius:0;padding:7px 12px}
+.seg .btn:first-child{border-radius:999px 0 0 999px}
+.seg .btn:last-child{border-radius:0 999px 999px 0}
+.seg .btn.on{background:linear-gradient(#5a3a12,#3d260a);color:#f6dc8e;box-shadow:inset 0 2px 5px #000a}
+.seg .btn:active{transform:none}
+.lbl{color:#cdb98f;font-size:12px;letter-spacing:.2em;text-transform:uppercase}
+
+.stage{position:relative;filter:drop-shadow(0 28px 34px rgba(0,0,0,.6)) drop-shadow(0 6px 8px rgba(0,0,0,.4))}
+#board{display:block;width:100%;height:auto;touch-action:none}
+#board .hit{cursor:grab}
+#board.dragging,#board.dragging .hit{cursor:grabbing}
+#hint{animation:pulse 0.9s ease-in-out infinite}
+@keyframes pulse{50%{stroke-width:3.2}}
+.ripple{transform-box:fill-box;transform-origin:center;animation:rip .55s cubic-bezier(.2,.7,.3,1) forwards;pointer-events:none}
+@keyframes rip{from{transform:scale(.7);opacity:.85}to{transform:scale(3.4);opacity:0}}
+
+.plaques{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:22px}
+.plaque{
+  position:relative;display:flex;align-items:center;gap:12px;padding:12px 14px 12px 16px;border-radius:14px;
+  background:linear-gradient(#3b2414,#24150a);border:1px solid #000;
+  box-shadow:inset 0 1px 0 #ffffff1c,inset 0 0 0 2px #c99a3b33,0 8px 18px #0007;
+}
+.plaque::before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:4px;border-radius:0 4px 4px 0;background:var(--c)}
+.pegdot{flex:none;width:24px;height:24px;padding:0;border:0;border-radius:50%;cursor:pointer;background:radial-gradient(circle at 35% 30%,var(--cl),var(--c) 45%,var(--cd));box-shadow:0 3px 5px #000a;transition:transform .15s}
+.pegdot:hover{transform:scale(1.15);box-shadow:0 0 0 2px #c99a3b,0 3px 5px #000a}
+#picker{
+  position:absolute;z-index:6;width:220px;padding:12px;border-radius:14px;
+  background:linear-gradient(#3b2414,#1e1108);border:1px solid #000;box-shadow:inset 0 0 0 1px #c99a3b55,0 16px 36px #000c;
+  opacity:0;transform:translateY(-6px) scale(.96);transform-origin:top left;pointer-events:none;transition:.18s cubic-bezier(.2,1.3,.4,1);
+}
+#picker.show{opacity:1;transform:none;pointer-events:auto}
+.ptitle{font:600 12px Georgia,serif;color:#cdb98f;letter-spacing:.06em;margin:0 2px 8px}
+.swatches{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}
+.sw{position:relative;aspect-ratio:1;border:0;padding:0;border-radius:50%;cursor:pointer;
+  background:radial-gradient(circle at 35% 30%,var(--cl),var(--c) 45%,var(--cd));box-shadow:0 3px 5px #000a;transition:transform .12s}
+.sw:hover{transform:scale(1.18)}
+.sw.cur{box-shadow:0 0 0 2px #1e1108,0 0 0 4px #f6dc8e,0 3px 5px #000a}
+.owner{position:absolute;right:-4px;bottom:-4px;width:14px;height:14px;border-radius:50%;background:#1b120a;border:1px solid #c99a3b;color:#f6dc8e;font:700 8px/12px Georgia,serif;text-align:center}
+.plaque input{flex:1;min-width:0;background:transparent;border:0;outline:0;color:#f3e7cf;font:600 16px Georgia,serif;padding:2px 0;border-bottom:1px dashed transparent}
+.plaque input:hover,.plaque input:focus{border-bottom-color:#c99a3b88}
+.score{font:700 30px/1 Georgia,serif;color:#f6dc8e;text-shadow:0 2px 0 #000;min-width:52px;text-align:right;font-variant-numeric:tabular-nums}
+.score.pop{animation:pop .35s ease-out}
+@keyframes pop{40%{transform:scale(1.25);color:#fff}}
+.nm{flex:1;min-width:0;display:flex;flex-direction:column}
+.cast{font:italic 12px Georgia,serif;color:#cdb98f;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.85}
+.cast i{cursor:pointer;border-bottom:1px dotted #c99a3b66}
+.cast i:hover{color:#f6dc8e}
+
+.foot{margin-top:18px;color:#a8c4b2;font-size:12.5px;text-align:center;opacity:.8}
+kbd{font:11px ui-monospace,monospace;background:#0004;border:1px solid #fff3;border-radius:4px;padding:0 4px}
+
+#toast{
+  position:fixed;left:50%;bottom:28px;transform:translate(-50%,30px);opacity:0;pointer-events:none;
+  background:#1b120aee;border:1px solid #c99a3b;color:#f6dc8e;font:600 15px Georgia,serif;
+  padding:10px 18px;border-radius:999px;box-shadow:0 10px 30px #000a;transition:.35s cubic-bezier(.2,1.4,.4,1);
+}
+#toast.show{opacity:1;transform:translate(-50%,0)}
+#fx{position:fixed;inset:0;pointer-events:none;z-index:5}
+#win,#riv{position:fixed;inset:0;display:grid;place-items:center;background:#0008;z-index:4;opacity:0;pointer-events:none;transition:opacity .4s}
+#win.show,#riv.show{opacity:1;pointer-events:auto}
+#riv{z-index:10}
+#riv .wincard{max-width:min(600px,calc(100vw - 24px));max-height:calc(100vh - 32px);overflow:auto;padding:24px 22px}
+#riv.show .wincard{transform:scale(1)}
+.rhead{font:italic 700 20px Georgia,serif;color:#f6dc8e;margin:2px 0 4px}
+.rsub{color:#cdb98f;font-size:13px;margin:0 0 12px}
+.form{display:flex;flex-wrap:wrap;gap:5px;justify-content:center;margin:0 0 14px}
+.form i{width:14px;height:14px;border-radius:50%;background:radial-gradient(circle at 35% 30%,var(--cl),var(--c) 45%,var(--cd));box-shadow:0 2px 3px #000a}
+.form i.sk{outline:2px solid #b6e05a;outline-offset:1px}
+.rtab{width:100%;border-collapse:collapse;font-size:14px;text-align:center}
+.rtab th{font:700 14px Georgia,serif;color:#f3e7cf;padding:6px 4px;border-bottom:2px solid var(--c,#c99a3b)}
+.rtab td{padding:6px 4px;border-top:1px solid #ffffff12;color:#e6d6b6;font-variant-numeric:tabular-nums}
+.rtab td:first-child{text-align:left;color:#cdb98f;font-size:12.5px;letter-spacing:.04em}
+.rtab td.top{color:#f6dc8e;font-weight:700}
+.rnote{color:#8a7658;font-size:12px;margin-top:10px}
+.wincard{
+  text-align:center;padding:28px 36px;border-radius:20px;max-width:min(440px,calc(100vw - 32px));
+  background:linear-gradient(#3b2414,#1e1108);border:1px solid #000;
+  box-shadow:inset 0 0 0 2px #c99a3b66,0 30px 60px #000c;transform:scale(.85);transition:transform .5s cubic-bezier(.2,1.5,.4,1);
+}
+#win.show .wincard{transform:scale(1)}
+.wincard h2{margin:0 0 6px;font:italic 700 34px Georgia,serif;color:#f6dc8e}
+.wincard p{margin:4px 0;color:#e6d6b6}
+.wincard .row{display:flex;gap:10px;justify-content:center;margin-top:18px}
+.eng-ink{fill:var(--ink)} .eng-hi{fill:var(--hi)}
+
+/* match tracking */
+.games{flex:none;font:700 13px Georgia,serif;color:#f6dc8e;background:#0005;border:1px solid #c99a3b55;border-radius:999px;padding:2px 9px;white-space:nowrap}
+.matchline{margin-top:12px !important;padding-top:10px;border-top:1px solid #c99a3b44;color:#f6dc8e !important}
+#match:empty{display:none}
+#match{margin-top:16px;padding:14px 16px;border-radius:14px;background:linear-gradient(#2b1a0e,#1a0f07);border:1px solid #000;box-shadow:inset 0 0 0 1px #c99a3b33,0 8px 18px #0007}
+.mhead{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:8px}
+.mhead h2{margin:0;font:italic 700 18px Georgia,serif;color:#f6dc8e}
+.mhead h2{flex:1}
+.tots{display:flex;flex-wrap:wrap;gap:6px 18px;flex-basis:100%;order:3}
+.tot{font:15px Georgia,serif;color:#e6d6b6}
+.tot i{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--c);margin-right:6px;box-shadow:0 0 6px var(--c)}
+.tot b{color:#f6dc8e;font-size:18px;margin-left:2px}
+.btn.small{padding:4px 11px;font-size:12px}
+#match ol{list-style:none;margin:0;padding:0;max-height:220px;overflow:auto}
+#match li{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;padding:6px 2px;border-top:1px solid #ffffff10;font-size:13.5px;color:#cdb98f}
+.gn{color:#8a7658;font-variant-numeric:tabular-nums;min-width:26px}
+.gw{font:700 14px Georgia,serif;color:#f3e7cf;border-bottom:2px solid var(--c)}
+.gs{flex:1;min-width:140px}
+.sk{color:#b6e05a;font-weight:600}
+.gp{font:700 14px Georgia,serif;color:#f6dc8e}
+.gt{color:#8a7658;font-size:12px}
+
+/* skins picker */
+.skinrow{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+.skin{width:40px;height:28px;border-radius:8px;border:0;padding:0;cursor:pointer;box-shadow:0 3px 5px #000a;transition:transform .12s;background:var(--bg)}
+.skin:hover{transform:scale(1.1)}
+.skin.cur{box-shadow:0 0 0 2px #1e1108,0 0 0 4px #f6dc8e,0 3px 5px #000a}
+
+/* big-hand celebration */
+#big{position:fixed;inset:0;display:grid;place-items:center;pointer-events:none;z-index:8}
+#big .word{
+  font:italic 900 clamp(48px,11vw,150px)/1 Georgia,serif;letter-spacing:-.02em;text-align:center;
+  background:linear-gradient(#fff6cf,#f2c75c 45%,#b07a18);-webkit-background-clip:text;background-clip:text;color:transparent;
+  filter:drop-shadow(0 6px 0 #5c410e) drop-shadow(0 18px 30px #000c);
+}
+#big .word small{display:block;font:italic 700 clamp(16px,2.6vw,30px) Georgia,serif;color:#fff1c8;-webkit-text-fill-color:#fff1c8;margin-top:10px;letter-spacing:.02em}
+#big .word.go{animation:bigIn 2.6s cubic-bezier(.2,1.6,.4,1) forwards}
+#big .word.mid{font-size:clamp(36px,7vw,96px)}
+@keyframes bigIn{
+  0%{transform:scale(.2) rotate(-12deg);opacity:0}
+  14%{transform:scale(1.15) rotate(3deg);opacity:1}
+  20%{transform:scale(.95) rotate(-2deg)}
+  26%,75%{transform:scale(1) rotate(0)}
+  78%{transform:scale(1.04) rotate(1deg)}
+  100%{transform:scale(1.6);opacity:0}
+}
+body.shake .wrap{animation:shake .5s}
+@keyframes shake{20%{transform:translate(-8px,3px)}40%{transform:translate(7px,-4px)}60%{transform:translate(-5px,2px)}80%{transform:translate(3px,-1px)}}
+
+/* peg chatter */
+.talkbar{position:relative;z-index:5;display:flex;flex-direction:column;gap:6px;min-height:50px;margin-top:14px}
+.say{display:flex;gap:9px;align-items:flex-start;align-self:flex-start;max-width:min(620px,100%);padding:7px 14px 8px 8px;border-radius:14px;
+  background:#fbf1dc;color:#2a1a0a;font:600 14.5px/1.3 Georgia,serif;border:2px solid var(--c);box-shadow:0 6px 14px #0007;
+  opacity:0;transform:translateY(8px) scale(.96);transition:transform .28s cubic-bezier(.2,1.6,.4,1),opacity .15s}
+.say.right{align-self:flex-end}
+.say.show{transform:none;opacity:1}
+.say.out{opacity:0;transform:translateY(-4px) scale(.97);transition:transform .2s,opacity .2s}
+.say .av{flex:none;width:20px;height:20px;margin-top:1px;border-radius:50%;background:radial-gradient(circle at 35% 30%,var(--cl),var(--c) 45%,var(--cd));box-shadow:0 2px 3px #0008}
+.say .tx{min-width:0}
+.say b{display:block;font:italic 700 10.5px/1.2 Georgia,serif;letter-spacing:.08em;text-transform:uppercase;color:var(--cd);margin-bottom:1px}
+.say .g{opacity:0}
+.say.angry{animation:jitter .12s linear 4}
+@keyframes jitter{25%{margin-left:-2px}75%{margin-left:2px}}
+
+/* skunk parade */
+.skunk{position:fixed;left:0;top:0;z-index:9;pointer-events:none;font-size:64px;line-height:1;will-change:transform}
+.skunk span{display:inline-block;transform:scaleX(-1);animation:waddle .34s ease-in-out infinite alternate}
+@keyframes waddle{from{transform:scaleX(-1) rotate(-7deg) translateY(0)}to{transform:scaleX(-1) rotate(7deg) translateY(-6px)}}
+.stink{position:fixed;z-index:8;pointer-events:none;width:46px;height:46px;border-radius:50%;
+  background:radial-gradient(circle,#b6e05aee,#7fb43a88 45%,#5a8a2a00 70%);animation:stink 1.8s ease-out forwards}
+@keyframes stink{from{transform:translate(-50%,-50%) scale(.4);opacity:.95}to{transform:translate(-50%,-90%) scale(2.6);opacity:0}}
+
+/* ================== Online play ================== */
+#lobby{position:fixed;inset:0;z-index:20;display:grid;place-items:center;padding:16px;
+  background:radial-gradient(ellipse at 50% 30%,var(--f1),var(--f2) 60%,var(--f3));overflow:auto}
+#lobby.hide{display:none}
+.lcard{width:min(420px,100%);padding:22px 20px;border-radius:20px;text-align:center;
+  background:linear-gradient(#3b2414,#1e1108);border:1px solid #000;box-shadow:inset 0 0 0 2px #c99a3b66,0 30px 60px #000c}
+.lcard h2{margin:0 0 2px;font:italic 700 34px Georgia,serif;color:#f6dc8e}
+.lcard .sub{color:#cdb98f;font-size:13px;margin:0 0 16px}
+.lcard label{display:block;text-align:left;color:#cdb98f;font-size:11px;letter-spacing:.2em;text-transform:uppercase;margin:12px 2px 5px}
+.lcard input{width:100%;font:600 18px Georgia,serif;color:#f3e7cf;background:#0006;border:1px solid #c99a3b77;border-radius:12px;padding:11px 13px;outline:0}
+.lcard input:focus{border-color:#f6dc8e}
+#joinCode{text-transform:uppercase;letter-spacing:.4em;text-align:center;font-size:24px}
+.lcard .btn{width:100%;padding:12px;font-size:15px;margin-top:10px}
+.lcard .or{color:#8a7658;font-size:12px;margin:14px 0 2px;letter-spacing:.2em}
+.lcard .link{background:none;border:0;color:#cdb98f;text-decoration:underline;font-size:13px;margin-top:16px;cursor:pointer}
+.bigcode{font:700 46px/1 ui-monospace,Menlo,monospace;letter-spacing:.25em;color:#f6dc8e;margin:10px 0 4px;text-shadow:0 3px 0 #000}
+.lerr{color:#ff9a9e;font-size:13px;min-height:18px;margin-top:8px}
+.resume{margin-top:4px}
+
+#netPill{display:none;font:600 12px ui-sans-serif,system-ui;color:#e6d6b6;background:#0006;border:1px solid #c99a3b55;border-radius:999px;padding:4px 10px;white-space:nowrap}
+#netPill i{display:inline-block;width:8px;height:8px;border-radius:50%;background:#e0aa2c;margin-right:6px;vertical-align:1px}
+#netPill.ok i{background:#5fdc7a;box-shadow:0 0 6px #5fdc7a}
+#netPill.bad i{background:#ff5a5a}
+#menuBtn{display:none}
+
+#table{display:none}
+body.online #table{display:block}
+body.online #netPill,body.online #menuBtn{display:inline-block}
+body.online .wrap{padding:max(8px,env(safe-area-inset-top)) 10px 0}
+body.online header{flex-wrap:nowrap;margin-bottom:8px;gap:8px}
+body.online h1{font-size:22px;flex:1}
+body.online h1 span{display:none}
+body.online header .bar{display:none;position:absolute;right:10px;top:48px;z-index:12;flex-direction:column;align-items:stretch;
+  padding:12px;border-radius:14px;background:linear-gradient(#3b2414,#1e1108);border:1px solid #000;box-shadow:inset 0 0 0 1px #c99a3b55,0 16px 36px #000c}
+body.online header .bar.open{display:flex}
+body.online #countSeg,body.online .bar .lbl,body.online #undoBtn{display:none}
+body.online .talkbar{min-height:0;margin-top:8px;gap:4px}
+body.online .say{font-size:13px;padding:5px 10px 6px 6px}
+body.online .plaques{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;margin-top:12px}
+body.online .plaque{padding:8px 10px;gap:8px}
+body.online .plaque input{font-size:14px;width:100%}
+body.online .plaque .games{display:none}
+html,body{max-width:100%;overflow-x:hidden}
+body.online .score{font-size:24px;min-width:38px}
+body.online .pegdot{width:18px;height:18px}
+body.online .foot{display:none}
+body.online #match{margin-bottom:20px}
+
+.card{--cw:min(60px,calc((100vw - 52px) / 6.2));position:relative;flex:none;width:var(--cw);height:calc(var(--cw) * 1.4);border-radius:calc(var(--cw) * .12);
+  background:linear-gradient(#fffdf6,#f1e8d2);color:#16161a;box-shadow:0 1px 0 #fff inset,0 3px 7px #0008;border:1px solid #0005;
+  font-family:Georgia,"Times New Roman",serif;transition:transform .18s cubic-bezier(.2,1.4,.4,1),opacity .2s,box-shadow .2s}
+.card.red{color:#c3122c}
+.card .cr{position:absolute;left:5%;top:3%;font-weight:700;font-size:calc(var(--cw) * .3);line-height:.95;text-align:center}
+.card .cr small{display:block;font-size:.8em}
+.card .cs{position:absolute;left:0;right:0;bottom:8%;text-align:center;font-size:calc(var(--cw) * .52);line-height:1}
+.card.back{background:repeating-linear-gradient(45deg,#7a1424 0 5px,#5a0d1a 5px 10px);border:3px solid #f1e8d2;box-shadow:0 3px 7px #0008}
+.card.sm{--cw:38px}
+.card.xs{--cw:30px;box-shadow:0 2px 4px #0008}
+.card.starter{box-shadow:0 0 0 2px #f6dc8e,0 0 14px #f6dc8e99}
+.card.new{animation:deal .35s cubic-bezier(.2,1.4,.4,1)}
+@keyframes deal{from{transform:translateY(-30px) rotate(-8deg) scale(.8);opacity:0}}
+
+.tfelt{position:relative;margin-top:10px;padding:10px;border-radius:16px;background:#0003;box-shadow:inset 0 2px 12px #0006;border:1px solid #ffffff10}
+.trow{display:flex;align-items:center;gap:10px;min-height:28px}
+.who{font:italic 700 13px Georgia,serif;color:#cdb98f;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.who b{color:#f3e7cf;font-style:normal}
+.backs{display:flex}
+.backs .card{margin-left:-14px}
+.backs .card:first-child{margin-left:0}
+.tmid{display:flex;align-items:flex-start;gap:12px;margin:10px 0 6px}
+.slot{display:flex;flex-direction:column;align-items:center;gap:4px;min-width:64px}
+.slot .cap{font:600 10px ui-sans-serif,system-ui;letter-spacing:.14em;text-transform:uppercase;color:#a8c4b2}
+.deck{position:relative;cursor:default}
+.deck.can{cursor:pointer;animation:nudge 1.2s ease-in-out infinite}
+@keyframes nudge{50%{transform:translateY(-4px) rotate(-2deg)}}
+.pilebox{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:4px}
+.pile{display:flex;justify-content:center;min-height:calc(38px * 1.4);flex-wrap:nowrap}
+.pile .card{margin-left:-16px}
+.pile .card:first-child{margin-left:0}
+.pile .card.theirs{transform:translateY(-5px)}
+.pile .card.mine{transform:translateY(5px)}
+.count{font:700 26px/1 Georgia,serif;color:#f6dc8e;text-shadow:0 2px 0 #000}
+.count small{font:600 10px ui-sans-serif,system-ui;letter-spacing:.14em;color:#a8c4b2;display:block;text-align:center}
+.prev{display:flex;opacity:.45}
+.prev .card{margin-left:-20px}.prev .card:first-child{margin-left:0}
+.status{text-align:center;font:700 16px Georgia,serif;color:#f3e7cf;min-height:22px;margin-top:6px}
+.status.myturn{color:#f6dc8e;animation:glowt 1.3s ease-in-out infinite}
+@keyframes glowt{50%{text-shadow:0 0 12px #f6dc8e}}
+.lastlog{text-align:center;color:#a8c4b2;font-size:12.5px;min-height:17px}
+
+#handBar{position:sticky;bottom:0;z-index:6;margin:10px -10px 0;padding:10px 10px max(12px,env(safe-area-inset-bottom));
+  background:linear-gradient(#0000,var(--f3) 22%);}
+.hand{display:flex;justify-content:center;padding-top:18px;min-height:calc(min(60px,(100vw - 52px) / 6.2) * 1.4 + 18px)}
+.hand .card{margin-left:-6px;cursor:pointer}
+.hand .card:first-child{margin-left:0}
+.hand .card.sel{transform:translateY(-16px);box-shadow:0 0 0 2px #f6dc8e,0 8px 14px #000a}
+.hand .card.dim{opacity:.4;filter:grayscale(.5)}
+.acts{display:flex;gap:8px;justify-content:center;margin-top:10px}
+.acts .btn{flex:1;max-width:340px;padding:12px;font-size:15px}
+.acts .btn.quiet{flex:0 0 auto;background:linear-gradient(#5a3a12,#3d260a);color:#f6dc8e}
+
+#showBox{display:none;margin-top:8px}
+#showBox.on{display:block}
+.shw{display:flex;gap:10px;align-items:flex-start;padding:8px;border-radius:12px;background:#00000033;margin-top:6px;border-left:4px solid var(--c,#c99a3b)}
+.shw .cards{display:flex}
+.shw .cards .card{margin-left:-10px}.shw .cards .card:first-child{margin-left:0}
+.shw .info{flex:1;min-width:0}
+.shw .ttl{font:italic 700 13px Georgia,serif;color:#f3e7cf}
+.shw ul{margin:2px 0 0;padding:0;list-style:none;font-size:12.5px;color:#cdb98f}
+.shw .stot{font:700 24px Georgia,serif;color:#f6dc8e}
+.shw.wait{opacity:.5}
+#leaveBtn{display:none}
+body.online #leaveBtn{display:inline-block}
+body.online #newBtn{display:none}
+.hand .card.gone{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Cribbage<span>121</span></h1>
+    <span id="netPill"></span><button class="btn" id="menuBtn" aria-label="Menu">☰</button>
+    <div class="bar">
+      <span class="lbl">Players</span>
+      <span class="seg" id="countSeg"></span>
+      <button class="btn" id="undoBtn" title="Undo (Ctrl/⌘+Z)">↶ Undo</button>
+      <button class="btn" id="newBtn">New game</button>
+      <button class="btn" id="rivBtn" title="All-time head-to-head record">⚔️ Rivalry</button>
+      <button class="btn" id="castBtn" title="Give the pegs new personalities">🎭 Recast</button>
+      <button class="btn" id="chatBtn" title="How much the pegs talk"></button>
+      <button class="btn" id="voiceBtn" title="Read the pegs' lines aloud"></button>
+      <button class="btn" id="skinBtn" title="Board wood and table felt">🪵 Board</button>
+      <button class="btn" id="muteBtn" title="Sound"></button>
+      <button class="btn" id="leaveBtn">🚪 Leave game</button>
+    </div>
+  </header>
+
+  <div class="stage"><svg id="board" xmlns="http://www.w3.org/2000/svg"></svg></div>
+  <div class="talkbar" id="talk" aria-live="polite"></div>
+
+  <section id="table">
+    <div class="tfelt">
+      <div class="trow"><span class="who" id="oppWho"></span><div class="backs" id="oppBacks"></div></div>
+      <div class="tmid">
+        <div class="slot"><div id="deckSlot"></div><span class="cap" id="deckCap">Starter</span></div>
+        <div class="pilebox">
+          <div class="pile" id="pile"></div>
+          <div class="count" id="count"></div>
+          <div class="prev" id="prev"></div>
+        </div>
+        <div class="slot"><div class="backs" id="crib"></div><span class="cap" id="cribCap">Crib</span></div>
+      </div>
+      <div id="showBox"></div>
+      <div class="status" id="status"></div>
+      <div class="lastlog" id="lastlog"></div>
+    </div>
+    <div id="handBar">
+      <div class="hand" id="hand"></div>
+      <div class="acts" id="acts"></div>
+    </div>
+  </section>
+
+
+  <div class="plaques" id="plaques"></div>
+  <div id="match"></div>
+  <div class="foot">Drag a peg to any hole on its own track. Leapfrog your back peg ahead like the real thing. Tap a peg to poke it (they hate that). <kbd>⌘Z</kbd> undoes.</div>
+</div>
+
+
+<div id="lobby">
+  <div class="lcard" id="lcard"></div>
+</div>
+<div id="toast"></div>
+<div id="picker"></div>
+<div id="big"></div>
+<canvas id="fx"></canvas>
+<div id="win"><div class="wincard"><h2 id="winTitle"></h2><div id="winBody"></div>
+  <div class="row"><button class="btn" id="rematchBtn">Rematch</button><button class="btn" id="admireBtn">Admire the board</button></div></div></div>
+<div id="riv"><div class="wincard rivcard"><h2>The Rivalry</h2><div id="rivBody"></div>
+  <div class="row"><button class="btn small" id="rivClear">Clear all-time record</button><button class="btn" id="rivClose">Close</button></div></div></div>
+
+<script>
+var NET = { role: null };   // online play: null = board only, "host" or "guest"
+/* ================== Config ================== */
+const PEG_COLORS = [
+  { name:'Red',    base:'#d6323a', light:'#ff9a9e', dark:'#5e080d' },
+  { name:'Blue',   base:'#2d6be0', light:'#a9c9ff', dark:'#0a2260' },
+  { name:'Green',  base:'#2a9a4b', light:'#9eebb4', dark:'#093f17' },
+  { name:'Purple', base:'#8a4bd6', light:'#d6b8ff', dark:'#32105a' },
+  { name:'Gold',   base:'#e0aa2c', light:'#fff0b0', dark:'#6b4806' },
+  { name:'Orange', base:'#ee7424', light:'#ffc596', dark:'#6a2a04' },
+  { name:'Teal',   base:'#1ba6a0', light:'#9ff0e8', dark:'#06433f' },
+  { name:'Pink',   base:'#e04f9c', light:'#ffb8dc', dark:'#5e0b38' },
+  { name:'Ivory',  base:'#e9e0c8', light:'#ffffff', dark:'#8a7d5c' },
+  { name:'Ebony',  base:'#2b2b30', light:'#8d8d99', dark:'#050507' },
+  { name:'Silver', base:'#a9b1bb', light:'#f4f7fa', dark:'#454c55' },
+  { name:'Lime',   base:'#8cc63a', light:'#dcffaa', dark:'#33520b' },
+];
+const col = l => PEG_COLORS[S.colors[l]] || PEG_COLORS[l];
+// Wood: gradient stops, grain tint (rgb + strength), engraving ink and highlight.
+const WOODS = {
+  oak:    { name:'Oak',    stops:['#c58a4d', '#a26731', '#77451e'], grain:[.22, .11, .03], fine:[.15, .07, .02], ink:'#2a1406', hi:'#ffe1b0', edge:'#2e1707' },
+  maple:  { name:'Maple',  stops:['#efd2a2', '#dcb47e', '#b98a52'], grain:[.55, .36, .17], fine:[.5, .33, .16], ink:'#5a3815', hi:'#fff4dc', edge:'#6b4a24' },
+  cherry: { name:'Cherry', stops:['#c0603f', '#9a432a', '#6a2818'], grain:[.28, .08, .03], fine:[.2, .05, .02], ink:'#2a0a03', hi:'#ffd0b8', edge:'#2f0e05' },
+  walnut: { name:'Walnut', stops:['#7a4f30', '#5b3820', '#3a2111'], grain:[.12, .06, .02], fine:[.09, .04, .01], ink:'#120802', hi:'#f0caa0', edge:'#1a0d05' },
+  ebony:  { name:'Ebony',  stops:['#3b3532', '#27211e', '#141110'], grain:[.42, .38, .34], fine:[.3, .27, .24], ink:'#e2b956', hi:'#000000', edge:'#050403' },
+};
+const FELTS = {
+  green:    { name:'Green',    c:['#1f6044', '#0f3a27', '#061710'] },
+  blue:     { name:'Blue',     c:['#1f4d80', '#0f2b4d', '#06121f'] },
+  burgundy: { name:'Burgundy', c:['#74222f', '#45111b', '#1a0509'] },
+  charcoal: { name:'Charcoal', c:['#40444a', '#25272c', '#0c0d0f'] },
+};
+const wood = () => WOODS[S.wood] || WOODS.oak;
+const grainM = (g, a, b) => `0 0 0 0 ${g[0]}  0 0 0 0 ${g[1]}  0 0 0 0 ${g[2]}  ${a} 0 0 0 ${b}`;
+const KEY = 'cribbage-board-v2';
+const SP = 13.4, GG = 7.5, X0 = 128, LG = 26, RIN = 46;
+const NS = 'http://www.w3.org/2000/svg';
+
+/* ================== State ================== */
+function defaults() {
+  return { n:2, names:[1, 2, 3, 4].map(i => `Player ${i}`), colors:[0, 1, 2, 3], wood:'oak', felt:'green', games:[], life:null, cast:null, talk:0, voices:true, cur:null, holes:null, history:[], muted:false, winner:null };
+}
+// Per-game running stats feeding the all-time rivalry: biggest single move and deepest deficit per lane.
+function freshCur() { return { best:[0, 0, 0, 0], def:[0, 0, 0, 0], feared:[0, 0, 0, 0] }; }
+function load() {
+  try {
+    const s = JSON.parse(localStorage.getItem(KEY));
+    if (s && s.n >= 2 && s.n <= 4 && Array.isArray(s.names)) {
+      const r = Object.assign(defaults(), s);
+      delete r.dealer;
+      if (r.talk === undefined) r.talk = r.chat === 2 ? 3 : (r.chat || 0);   // old 3-level setting
+      delete r.chat;
+      if (!Array.isArray(r.life)) r.life = (r.games || []).slice();   // seed the all-time record from the current match
+      if (!r.cur || !Array.isArray(r.cur.best)) r.cur = freshCur();
+      return r;
+    }
+  } catch (e) {}
+  return null;
+}
+let S = load() || defaults();
+if (!Array.isArray(S.life)) S.life = [];
+if (!S.cur) S.cur = freshCur();
+function save() {
+  S.holes = pegs.map(p => p.hole);
+  try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {}
+}
+
+/* ================== Geometry ================== */
+let G, HOLES, pegs = [];
+function geom(n) {
+  const Rout = RIN + (n - 1) * LG, CY = Rout + 44;
+  const strX = i => X0 + i * SP + Math.floor(i / 5) * GG;
+  const CX = strX(54) + 14;
+  return { n, Rout, CY, CX, W: CX + Rout + 44, H: 2 * CY, strX, r: l => Rout - l * LG };
+}
+function buildHoles() {
+  const H = {}, { CY, CX, strX, r, n } = G;
+  for (let l = 0; l < n; l++) {
+    const R = r(l);
+    for (let k = 1; k <= 120; k++) {
+      let x, y;
+      if (k <= 55) { x = strX(k - 1); y = CY - R; }
+      else if (k <= 65) {
+        const j = k - 56, a = (-90 + (j + 0.5) * 18 + (j < 5 ? -2.5 : 2.5)) * Math.PI / 180;
+        x = CX + R * Math.cos(a); y = CY + R * Math.sin(a);
+      } else { x = strX(54 - (k - 66)); y = CY + R; }
+      H[`${l}:${k}`] = { x, y, lane: l, n: k };
+    }
+    H[`${l}:s0`] = { x: X0 - 48, y: CY - R, lane: l, n: 0 };
+    H[`${l}:s1`] = { x: X0 - 31, y: CY - R, lane: l, n: 0 };
+  }
+  H.game = { x: X0 - 64, y: CY, lane: -1, n: 121 };
+  return H;
+}
+
+/* ================== Board drawing ================== */
+const svg = document.getElementById('board');
+let hintEl, bubbleEl, bubbleRect, bubbleText, fxLayer, pegLayer;
+
+function trackPath(R, x0) {
+  const { CY, CX } = G;
+  return `M ${x0} ${CY - R} H ${CX} A ${R} ${R} 0 0 1 ${CX} ${CY + R} H ${x0}`;
+}
+
+function buildBoard() {
+  G = geom(S.n); HOLES = buildHoles();
+  const { W, H, CY, CX, Rout, strX, r, n } = G;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  const rl = 40, bigR = CY - 10;
+  const shape = `M ${14 + rl} 10 H ${CX} A ${bigR} ${bigR} 0 0 1 ${CX} ${H - 10} H ${14 + rl} A ${rl} ${rl} 0 0 1 14 ${H - 10 - rl} V ${10 + rl} A ${rl} ${rl} 0 0 1 ${14 + rl} 10 Z`;
+
+  let s = `<defs>
+    <linearGradient id="wood" x1="0" y1="0" x2=".12" y2="1"><stop offset="0" stop-color="${wood().stops[0]}"/><stop offset=".5" stop-color="${wood().stops[1]}"/><stop offset="1" stop-color="${wood().stops[2]}"/></linearGradient>
+    <linearGradient id="varnish" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".22"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".18"/></linearGradient>
+    <filter id="grain" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="0.0032 0.12" numOctaves="4" seed="11"/>
+      <feColorMatrix id="grainM" type="matrix" values="${grainM(wood().grain, 2.7, -1.1)}"/></filter>
+    <filter id="grain2" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="0.015 0.7" numOctaves="2" seed="4"/>
+      <feColorMatrix id="grainM2" type="matrix" values="${grainM(wood().fine, 1.8, -.75)}"/></filter>
+    <radialGradient id="holeG" cx=".45" cy=".38" r=".65"><stop offset="0" stop-color="#000"/><stop offset=".7" stop-color="#120802"/><stop offset="1" stop-color="#3b220e"/></radialGradient>
+    <linearGradient id="brass" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fbe7a6"/><stop offset=".5" stop-color="#cfa040"/><stop offset="1" stop-color="#7d5a1a"/></linearGradient>
+    <filter id="soft" x="-1" y="-1" width="3" height="3"><feGaussianBlur stdDeviation="1.3"/></filter>
+    <filter id="glow" x="-1" y="-1" width="3" height="3"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    ${[0, 1, 2, 3].map(i => { const c = col(i); return `<radialGradient id="pg${i}" cx=".35" cy=".3" r=".8"><stop offset="0" stop-color="${c.light}"/><stop offset=".45" stop-color="${c.base}"/><stop offset="1" stop-color="${c.dark}"/></radialGradient>`; }).join('')}
+    <clipPath id="clip"><path d="${shape}"/></clipPath>
+  </defs>`;
+
+  // wood body
+  s += `<path d="${shape}" fill="url(#wood)"/>`;
+  s += `<g clip-path="url(#clip)"><rect width="${W}" height="${H}" filter="url(#grain)" opacity=".75"/><rect width="${W}" height="${H}" filter="url(#grain2)" opacity=".45"/>`;
+  s += `<path d="${shape}" fill="none" stroke="#ffe3b8" stroke-opacity=".28" stroke-width="2" transform="translate(0 2.2)"/>`;
+  s += `<path d="${shape}" fill="url(#varnish)"/></g>`;
+  s += `<path id="edge" d="${shape}" fill="none" stroke="${wood().edge}" stroke-width="3"/>`;
+
+  // brass track guides + lane tint grooves
+  const x0 = strX(0) - 14;
+  s += `<path d="${trackPath(Rout + 13, x0)}" fill="none" stroke="url(#brass)" stroke-width="1.6" opacity=".75"/>`;
+  s += `<path d="${trackPath(r(n - 1) - 13, x0)}" fill="none" stroke="url(#brass)" stroke-width="1.6" opacity=".75"/>`;
+  for (let l = 0; l < n; l++) {
+    // painted lane stripe: dark edge, saturated body, light sheen along the top
+    s += `<path class="tint" data-l="${l}" data-role="dark" d="${trackPath(r(l), X0 - 56)}" fill="none" stroke="${col(l).dark}" stroke-opacity=".55" stroke-width="15" stroke-linecap="round"/>`;
+    s += `<path class="tint" data-l="${l}" data-role="base" d="${trackPath(r(l), X0 - 56)}" fill="none" stroke="${col(l).base}" stroke-opacity=".85" stroke-width="12" stroke-linecap="round"/>`;
+    s += `<path class="tint" data-l="${l}" data-role="light" d="${trackPath(r(l) + 3, X0 - 56)}" fill="none" stroke="${col(l).light}" stroke-opacity=".45" stroke-width="2" stroke-linecap="round"/>`;
+  }
+
+  // engraving
+  const mx = (strX(0) + CX) / 2, fs = Math.min(30, RIN * 0.62);
+  const engrave = (x, y, txt, size, extra = '') =>
+    `<text class="eng-hi" x="${x}" y="${y + 1}" font-size="${size}" fill-opacity=".22" ${extra}>${txt}</text>` +
+    `<text class="eng-ink" x="${x}" y="${y}" font-size="${size}" fill-opacity=".62" ${extra}>${txt}</text>`;
+  s += `<g font-family="Georgia,serif" text-anchor="middle" font-weight="700">`;
+  s += engrave(mx, CY + fs * 0.35, 'CRIBBAGE', fs, `letter-spacing="${fs * 0.42}"`);
+  s += engrave(strX(0) + 40, CY + 7, '♠ ♥', 18) + engrave(CX - 40, CY + 7, '♣ ♦', 18);
+  // hole numbers
+  const nOut = Rout + 13;
+  for (let k = 10; k <= 120; k += 10) {
+    const h = HOLES[`0:${k}`];
+    let x = h.x, y;
+    if (k <= 55) y = CY - nOut - 7;
+    else if (k > 65) y = CY + nOut + 15;
+    else { const a = Math.atan2(h.y - CY, h.x - CX); x = CX + (nOut + 12) * Math.cos(a); y = CY + (nOut + 12) * Math.sin(a) + 4; }
+    s += engrave(x, y, k, 10, 'font-weight="400"');
+  }
+  // skunk lines
+  const xs = (HOLES['0:90'].x + HOLES['0:91'].x) / 2, rIn = r(n - 1) - 13;
+  s += `<line x1="${xs}" y1="${CY + rIn - 4}" x2="${xs}" y2="${CY + nOut + 4}" stroke="url(#brass)" stroke-width="1.6" stroke-dasharray="3 3"/>`;
+  s += `<line x1="${CX + rIn - 4}" y1="${CY}" x2="${CX + nOut + 4}" y2="${CY}" stroke="url(#brass)" stroke-width="1.6" stroke-dasharray="3 3"/>`;
+  s += engrave(xs, CY + rIn - 9, 'SKUNK', 8, 'letter-spacing="1.5"');
+  s += engrave(CX + rIn - 22, CY + 3, '×2', 9);
+  s += `</g>`;
+
+  // holes
+  s += `<g>`;
+  for (const key in HOLES) {
+    const h = HOLES[key];
+    if (key === 'game') {
+      s += `<circle cx="${h.x}" cy="${h.y}" r="12" fill="url(#brass)"/><circle cx="${h.x}" cy="${h.y}" r="9.5" fill="#5a3a12"/>`;
+      s += `<circle cx="${h.x}" cy="${h.y + .7}" r="6.6" fill="#ffe3b8" fill-opacity=".2"/><circle cx="${h.x}" cy="${h.y}" r="6" fill="url(#holeG)"/>`;
+      continue;
+    }
+    const start = h.n === 0;
+    if (start) s += `<circle cx="${h.x}" cy="${h.y}" r="7" fill="none" stroke="url(#brass)" stroke-width="1.2"/>`;
+    s += `<circle cx="${h.x}" cy="${h.y + .7}" r="4.6" fill="#ffe3b8" fill-opacity=".2"/><circle cx="${h.x}" cy="${h.y}" r="4" fill="url(#holeG)"/>`;
+  }
+  s += `</g>`;
+  s += `<g id="fxL"></g><circle id="hint" r="8" fill="none" stroke-width="2" filter="url(#glow)" opacity="0"/><g id="pegL"></g>`;
+  s += `<g id="bubble" opacity="0" pointer-events="none"><rect rx="7" height="19" fill="#1b120a" fill-opacity=".92" stroke="#cfa040"/><text text-anchor="middle" font-family="Georgia,serif" font-weight="700" font-size="11.5" fill="#f6dc8e"></text></g>`;
+  svg.innerHTML = s;
+  hintEl = svg.querySelector('#hint'); bubbleEl = svg.querySelector('#bubble');
+  bubbleRect = bubbleEl.querySelector('rect'); bubbleText = bubbleEl.querySelector('text');
+  fxLayer = svg.querySelector('#fxL'); pegLayer = svg.querySelector('#pegL');
+}
+
+/* ================== Pegs ================== */
+function createPegs() {
+  pegs = [];
+  for (let l = 0; l < S.n; l++) for (let i = 0; i < 2; i++) {
+    let key = S.holes && S.holes[l * 2 + i];
+    if (!key || !HOLES[key] || (HOLES[key].lane !== l && key !== 'game')) key = `${l}:s${i}`;
+    const h = HOLES[key];
+    const g = document.createElementNS(NS, 'g');
+    const id = pegs.length;
+    g.setAttribute('class', 'peg'); g.dataset.i = id;
+    g.innerHTML = `<circle class="ring" r="9" fill="none" stroke-width="1.6" opacity="0"/><ellipse class="sh" rx="6" ry="5.2" fill="#000" filter="url(#soft)"/>
+      <g class="bd"><circle class="pb" r="6" fill="url(#pg${l})" stroke="${col(l).dark}" stroke-width="1.2"/>
+      <ellipse cx="-.6" cy="-4.1" rx="2.2" ry=".9" fill="#fff" opacity=".7"/>
+      <g class="eyes">
+        <g transform="translate(-2.35 -.3)"><circle r="2.35" fill="#fff" stroke="#0007" stroke-width=".3"/><circle class="pu" r="1.15" fill="#111"/></g>
+        <g transform="translate(2.35 -.3)"><circle r="2.35" fill="#fff" stroke="#0007" stroke-width=".3"/><circle class="pu" r="1.15" fill="#111"/></g>
+      </g>
+      <path class="brl" d="M-1.25 0 L1.25 0" stroke="#1a0d05" stroke-width=".8" stroke-linecap="round"/>
+      <path class="brr" d="M-1.25 0 L1.25 0" stroke="#1a0d05" stroke-width=".8" stroke-linecap="round"/>
+      <path class="mouth" d="M-1.2 3.5 L1.2 3.5" stroke="#1a0d05" stroke-width=".6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      <path class="sweat" d="M5.2 -5.6 q1.5 2.1 0 3 q-1.5 -.9 0 -3z" fill="#9fdcff" stroke="#3b8fd0" stroke-width=".35" opacity="0"/></g>
+      <circle class="hit" r="15" fill="transparent"/>`;
+    pegLayer.appendChild(g);
+    pegs.push({ id, lane: l, hole: key, p: { x: h.x, y: h.y }, v: { x: 0, y: 0 }, t: { x: h.x, y: h.y },
+      lift: 0, lv: 0, liftT: 0, sq: 0, sv: 0, landing: false, soft: false, dragging: false,
+      el: g, bd: g.querySelector('.bd'), sh: g.querySelector('.sh'),
+      eyes: g.querySelector('.eyes'), pu: [...g.querySelectorAll('.pu')],
+      e: { x: 0, y: 0, vx: 0, vy: 0 }, pvx: 0, pvy: 0, blink: 0,
+      sweat: g.querySelector('.sweat'), nervous: false, glance: -Math.floor(Math.random() * 120),
+      ring: g.querySelector('.ring'), brL: g.querySelector('.brl'), brR: g.querySelector('.brr'), mouth: g.querySelector('.mouth'), md: null,
+      mood: null, moodUntil: 0, talkUntil: 0, lookAt: null, lookUntil: 0, lastLine: {} });
+  }
+  S.holes = pegs.map(p => p.hole);
+  refreshNerves();
+}
+const holeN = key => HOLES[key].n;
+
+// Near the end of a game, everyone trailing a leader at 100+ starts to sweat.
+let leaderPeg = null;
+function refreshNerves() {
+  let lead = -1, best = -1, tie = false;
+  for (let l = 0; l < S.n; l++) { const s = laneScore(l); if (s > best) { best = s; lead = l; tie = false; } else if (s === best) tie = true; }
+  const on = S.winner === null && best >= 100 && !tie;
+  leaderPeg = on ? pegs.filter(p => p.lane === lead).sort((a, b) => holeN(b.hole) - holeN(a.hole))[0] : null;
+  pegs.forEach(p => { p.nervous = on && p.lane !== lead; });
+}
+const laneScore = l => Math.max(...pegs.filter(p => p.lane === l).map(p => holeN(p.hole)));
+const occupied = (key, me) => pegs.some(o => o !== me && o.hole === key);
+
+function candidate(peg, x, y) {
+  let best = null, bd = 19 * 19;
+  for (const key in HOLES) {
+    const h = HOLES[key];
+    if (h.lane !== peg.lane && key !== 'game') continue;
+    if (occupied(key, peg)) continue;
+    const dx = h.x - x, dy = h.y - y, d = dx * dx + dy * dy;
+    if (d < bd) { bd = d; best = key; }
+  }
+  return best;
+}
+
+function sendTo(peg, key, soft) {
+  peg.hole = key;
+  const h = HOLES[key];
+  peg.t = { x: h.x, y: h.y };
+  peg.landing = true; peg.soft = soft;
+}
+
+/* ================== Physics loop ================== */
+let last = performance.now(), acc = 0, tickN = 0;
+function step() {
+  tickN++;
+  for (const p of pegs) {
+    const k = p.dragging ? 0.42 : 0.15, d = p.dragging ? 0.5 : 0.72;
+    p.v.x = (p.v.x + (p.t.x - p.p.x) * k) * d;
+    p.v.y = (p.v.y + (p.t.y - p.p.y) * k) * d;
+    p.p.x += p.v.x; p.p.y += p.v.y;
+    const dist = Math.hypot(p.t.x - p.p.x, p.t.y - p.p.y);
+    if (p.landing) p.liftT = dist > 3 ? 0.75 : 0;
+    p.lv = (p.lv + (p.liftT - p.lift) * 0.22) * 0.68; p.lift += p.lv;
+    p.sv = (p.sv + (0 - p.sq) * 0.32) * 0.74; p.sq += p.sv;
+    if (p.landing && dist < 0.9 && p.lift < 0.2) { p.landing = false; land(p); }
+    eyeStep(p);
+  }
+}
+let mouse = null;
+addEventListener('pointermove', e => { if (svg.getScreenCTM()) mouse = toSvg(e); }, { passive: true });
+function eyeStep(p) {
+  const ax = p.v.x - p.pvx, ay = p.v.y - p.pvy;
+  p.pvx = p.v.x; p.pvy = p.v.y;
+  let look = p.dragging ? { x: p.p.x + p.v.x * 20, y: p.p.y + p.v.y * 20 } : (drag ? drag.peg.p : mouse);
+  if (p.nervous && !p.dragging && leaderPeg) {
+    p.glance++;
+    if (p.glance > 0) look = leaderPeg.p;                       // side-eye the leader…
+    if (p.glance > 55) p.glance = -60 - Math.floor(Math.random() * 90);
+    p.e.vx += (Math.random() - 0.5) * 0.12; p.e.vy += (Math.random() - 0.5) * 0.12; // …jittery
+  }
+  if (!p.dragging && p.lookAt && performance.now() < p.lookUntil && pegs.includes(p.lookAt)) look = p.lookAt.p; // glaring at whoever they're talking to
+  let lx = 0, ly = 0;
+  if (look) {
+    const dx = look.x - p.p.x, dy = look.y - p.p.y, d = Math.hypot(dx, dy) || 1, m = Math.min(1, d / 30);
+    lx = dx / d * m * 1.0; ly = dy / d * m * 1.0;
+  }
+  const e = p.e;
+  e.vx = (e.vx + (lx - e.x) * 0.07 - ax * 0.3) * 0.88;
+  e.vy = (e.vy + (ly - e.y) * 0.07 - ay * 0.3) * 0.88;
+  e.x += e.vx; e.y += e.vy;
+  const r = Math.hypot(e.x, e.y), max = 1.15;
+  if (r > max) { e.x *= max / r; e.y *= max / r; e.vx *= -0.45; e.vy *= -0.45; }
+  if (p.blink > 0) p.blink--;
+  else if (Math.random() < 0.0025) p.blink = 7;
+}
+// Faces: brow angles [left, right, raise], eye squint, mouth [path, filled].
+const BROWS = { none:[0, 0, 0], angry:[24, -24, .25], leer:[20, -8, .2], scared:[-22, 22, -.55], sad:[-18, 18, -.2],
+  smug:[-12, 6, -.5], happy:[0, 0, -.55], meh:[0, 0, .35] };
+const SQUINT = { leer:.5, angry:.75, smug:.7, happy:.8, meh:.6 };
+const MOUTHS = {
+  none:['M-1.2 3.5 L1.2 3.5', 0], happy:['M-1.8 2.9 Q0 5 1.8 2.9 Z', 1], smug:['M-1.6 3.3 Q.4 4.3 1.8 2.8', 0],
+  leer:['M-1.7 3.4 Q.6 4 1.9 2.7', 0], angry:['M-1.5 4 Q0 2.9 1.5 4', 0], sad:['M-1.6 4.3 Q0 2.8 1.6 4.3', 0],
+  scared:['M-.9 3.6 a.9 1.05 0 1 0 1.8 0 a.9 1.05 0 1 0 -1.8 0', 1], meh:['M-1.3 3.7 L1.3 3.4', 0],
+  talk:['M-1.3 3 Q0 5.4 1.3 3 Z', 1],
+};
+function draw() {
+  const now = performance.now();
+  for (const p of pegs) {
+    const L = Math.max(0, p.lift), s = 1 + L * 0.42;
+    const shocked = S.winner !== null && p.lane !== S.winner;
+    const mood = p.moodUntil > now ? p.mood : p.nervous ? 'scared' : shocked ? 'sad' : S.winner === p.lane ? 'happy' : 'none';
+    const talking = p.talkUntil > now;
+    const wig = talking && (mood === 'leer' || mood === 'smug' || mood === 'happy' || mood === 'angry') ? Math.sin(now / 85 + p.id) * 9 : 0;
+    p.el.setAttribute('transform', `translate(${p.p.x.toFixed(2)} ${p.p.y.toFixed(2)})`);
+    p.bd.setAttribute('transform', `translate(0 ${(-L * 5 - (talking ? 1.2 : 0)).toFixed(2)}) rotate(${wig.toFixed(1)}) scale(${(s * (1 + p.sq)).toFixed(3)} ${(s * (1 - p.sq)).toFixed(3)})`);
+    p.sh.setAttribute('transform', `translate(${(1.2 + L * 6).toFixed(2)} ${(2 + L * 9).toFixed(2)}) scale(${(1 + L * 0.6).toFixed(3)})`);
+    p.sh.setAttribute('opacity', (0.55 - L * 0.28).toFixed(3));
+    const B = BROWS[mood] || BROWS.none;
+    p.brL.setAttribute('transform', `translate(-2.35 ${(-3.55 + B[2]).toFixed(2)}) rotate(${B[0]})`);
+    p.brR.setAttribute('transform', `translate(2.35 ${(-3.55 + B[2]).toFixed(2)}) rotate(${B[1]})`);
+    const M = talking && Math.floor(now / 95) % 2 === 0 ? MOUTHS.talk : (MOUTHS[mood] || MOUTHS.none);
+    if (p.md !== M) { p.md = M; p.mouth.setAttribute('d', M[0]); p.mouth.setAttribute('fill', M[1] ? '#3a0d06' : 'none'); }
+    const wide = (1 + L * 0.22) * (shocked ? 1.32 : p.nervous || mood === 'scared' ? 1.12 : 1), lid = (p.blink > 0 && !shocked ? 0.12 : 1) * (SQUINT[mood] || 1);
+    p.eyes.setAttribute('transform', `translate(0 -.3) scale(${wide.toFixed(3)} ${(wide * lid).toFixed(3)}) translate(0 .3)`);
+    const pt = `translate(${p.e.x.toFixed(2)} ${p.e.y.toFixed(2)}) scale(${((1 - L * 0.3) * (shocked ? 0.5 : p.nervous ? 0.8 : 1)).toFixed(3)})`;
+    if (p.nervous) {
+      const t = (tickN + p.id * 37) % 80;
+      p.sweat.setAttribute('transform', `translate(0 ${(t / 80 * 7).toFixed(2)})`);
+      p.sweat.setAttribute('opacity', (t < 55 ? 0.95 : (80 - t) / 25 * 0.95).toFixed(2));
+    } else p.sweat.setAttribute('opacity', 0);
+    p.pu[0].setAttribute('transform', pt); p.pu[1].setAttribute('transform', pt);
+  }
+  placeBubbles(now);
+}
+function frame(now) {
+  acc += Math.min(100, now - last); last = now;
+  while (acc >= 16.67) { step(); acc -= 16.67; }
+  draw();
+  requestAnimationFrame(frame);
+}
+
+function land(p) {
+  tock(p.soft ? 0.45 : 1);
+  p.sv = p.soft ? 0.12 : 0.24;
+  const h = HOLES[p.hole];
+  const c = document.createElementNS(NS, 'circle');
+  c.setAttribute('cx', h.x); c.setAttribute('cy', h.y); c.setAttribute('r', 6);
+  c.setAttribute('fill', 'none'); c.setAttribute('stroke', col(p.lane).light); c.setAttribute('stroke-width', 1.5);
+  c.setAttribute('class', 'ripple');
+  c.addEventListener('animationend', () => c.remove());
+  fxLayer.appendChild(c);
+  if (navigator.vibrate) try { navigator.vibrate(p.soft ? 5 : 12); } catch (e) {}
+}
+
+/* ================== Dragging ================== */
+let drag = null;
+function toSvg(e) {
+  const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
+  return pt.matrixTransform(svg.getScreenCTM().inverse());
+}
+svg.addEventListener('pointerdown', e => {
+  const g = e.target.closest('.peg');
+  if (!g || drag) return;
+  e.preventDefault();
+  audio();
+  const peg = pegs[+g.dataset.i];
+  const pt = toSvg(e);
+  drag = { peg, id: e.pointerId, ox: peg.p.x - pt.x, oy: peg.p.y - pt.y, cand: peg.hole, from: peg.hole, t0: performance.now() };
+  bump();
+  say(peg, 'lift', { chance: 0.22 }, 120, 1);
+  svg.setPointerCapture(e.pointerId);
+  svg.classList.add('dragging');
+  pegLayer.appendChild(g);
+  peg.dragging = true; peg.landing = false; peg.liftT = 1;
+  pick();
+  move(e);
+});
+function move(e) {
+  if (!drag || e.pointerId !== drag.id || NET.role) return;   // online, the game moves the pegs
+  const pt = toSvg(e), peg = drag.peg;
+  const x = pt.x + drag.ox * 0.5, y = pt.y + drag.oy * 0.5;
+  const c = candidate(peg, x, y);
+  if (c) { const h = HOLES[c]; peg.t = { x: x + (h.x - x) * 0.45, y: y + (h.y - y) * 0.45 }; }
+  else peg.t = { x, y };
+  if (c !== drag.cand) { drag.cand = c; if (c) tick(); showHint(peg, c); }
+}
+svg.addEventListener('pointermove', move);
+function release(e, cancel) {
+  if (!drag || e.pointerId !== drag.id) return;
+  const { peg, cand, from, t0 } = drag;
+  drag = null;
+  bump();
+  svg.classList.remove('dragging');
+  peg.dragging = false;
+  showHint(peg, null);
+  if (!cancel && cand && cand !== from && !NET.role) {
+    const before = laneScore(peg.lane);
+    sendTo(peg, cand, false);
+    S.history.push({ i: peg.id, from, to: cand });
+    afterMove(peg, before, from);
+  } else {
+    sendTo(peg, from, true);
+    if (!cancel && performance.now() - t0 < 350) { peg.sv = 0.4; pokePeg(peg); }   // a tap is a poke
+  }
+}
+svg.addEventListener('pointerup', e => release(e, false));
+svg.addEventListener('pointercancel', e => release(e, true));
+addEventListener('keydown', e => {
+  if (e.key === 'Escape' && drag) release({ pointerId: drag.id }, true);
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' && e.target.tagName !== 'INPUT') { e.preventDefault(); undo(); }
+});
+
+function showHint(peg, key) {
+  if (!key) { hintEl.setAttribute('opacity', 0); bubbleEl.setAttribute('opacity', 0); return; }
+  const h = HOLES[key];
+  hintEl.setAttribute('cx', h.x); hintEl.setAttribute('cy', h.y);
+  hintEl.setAttribute('r', key === 'game' ? 13 : 8);
+  hintEl.setAttribute('stroke', key === 'game' ? '#ffe7a0' : col(peg.lane).light);
+  hintEl.setAttribute('opacity', 1);
+  const other = pegs.find(o => o.lane === peg.lane && o !== peg);
+  const n = h.n, delta = n - holeN(other.hole);
+  let txt;
+  if (n === 0) txt = 'start';
+  else if (n === 121) txt = '121 · GAME!';
+  else if (n === 120) txt = `120 · stink hole${delta > 0 ? ` · +${delta}` : ''}`;
+  else txt = delta > 0 ? `${n}  ·  +${delta}` : `${n}`;
+  bubbleText.textContent = txt;
+  const w = bubbleText.getComputedTextLength() + 16;
+  const above = h.y > G.CY ? 1 : -1; // bubble outside the track
+  const by = above > 0 ? 30 : -30;
+  bubbleRect.setAttribute('x', -w / 2); bubbleRect.setAttribute('width', w); bubbleRect.setAttribute('y', by - 10);
+  bubbleText.setAttribute('y', by + 4);
+  bubbleEl.setAttribute('transform', `translate(${h.x} ${h.y})`);
+  bubbleEl.setAttribute('opacity', 1);
+}
+
+/* ================== Game flow ================== */
+function afterMove(peg, before, from) {
+  const after = laneScore(peg.lane), pts = after - before;
+  if (pts > 0) S.cur.best[peg.lane] = Math.max(S.cur.best[peg.lane], pts);
+  for (let l = 0; l < S.n; l++) {                   // deepest hole each player has been in (for "biggest comeback")
+    let lead = 0; for (let o = 0; o < S.n; o++) if (o !== l) lead = Math.max(lead, laneScore(o));
+    S.cur.def[l] = Math.max(S.cur.def[l], lead - laneScore(l));
+  }
+  refreshPlaques(peg.lane);
+  refreshNerves();
+  save();
+  if (peg.hole === 'game') { setTimeout(() => win(peg.lane), 260); return; }
+  chatter(peg, before, after, from);
+  if (pts >= 12 || pts === 19) setTimeout(() => celebrate(peg, pts), 380);
+  if (after > before) {
+    if (after === 120) toast('The stink hole! 🦨 One more…');
+    else if (before < 91 && after >= 91) toast(`${S.names[peg.lane]} is out of skunk territory`);
+    else if (before < 61 && after >= 61) toast(`${S.names[peg.lane]} dodged the double skunk`);
+  }
+}
+function undo() {
+  if (NET.role) return;
+  const h = S.history.pop();
+  if (!h) { toast('Nothing to undo'); return; }
+  const peg = pegs[h.i];
+  if (occupied(h.from, peg)) { S.history.push(h); return; }
+  pegLayer.appendChild(peg.el);
+  sendTo(peg, h.from, false);
+  if (h.to === 'game' && S.winner !== null) {       // taking back the winning peg un-records the game
+    S.winner = null; hideWin(); S.games.pop(); S.life.pop(); renderPlaques(); renderMatch();
+  }
+  refreshPlaques(peg.lane); refreshNerves(); save();
+  bump(); say(peg, 'undo', { chance: 0.75 }, 300, 2);
+}
+function newGame(n) {
+  hideWin();
+  S.winner = null; S.history = [];
+  S.cur = freshCur();
+  if (n && n !== S.n) { S.n = n; S.holes = null; init(); save(); introBeat(); return; }
+  let delay = 0;
+  [...pegs].sort((a, b) => holeN(b.hole) - holeN(a.hole)).forEach(p => {
+    const home = `${p.lane}:s${p.id % 2}`;
+    if (p.hole === home) return;
+    p.hole = home;
+    setTimeout(() => { pegLayer.appendChild(p.el); sendTo(p, home, false); }, delay);
+    delay += 90;
+  });
+  refreshPlaques(); refreshNerves(); save();
+  introBeat();
+}
+
+function win(lane) {
+  S.winner = lane; refreshNerves(); save();
+  chime();
+  const h = HOLES.game, m = svg.getScreenCTM();
+  confetti(h.x * m.a + m.e, h.y * m.d + m.f, [col(lane).base, col(lane).light, '#f6dc8e', '#fff']);
+  let low = 121;
+  for (let l = 0; l < S.n; l++) if (l !== lane) low = Math.min(low, laneScore(l));
+  const skunks = low < 61 ? 2 : low < 91 ? 1 : 0;
+  if (skunks) setTimeout(() => skunkParade(skunks), 900);
+  recordGame(lane, skunks);
+  const lines = pegs.filter(p => p.lane !== lane && p.id % 2 === 0).map(p => {
+    const sc = laneScore(p.lane), nm = esc(S.names[p.lane]);
+    if (sc < 61) return `<p>${nm}: ${sc} — <b>double skunk!</b> 🦨🦨</p>`;
+    if (sc < 91) return `<p>${nm}: ${sc} — <b>skunked</b> 🦨</p>`;
+    return `<p>${nm}: ${sc}</p>`;
+  }).join('');
+  document.getElementById('winTitle').textContent = `${S.names[lane]} wins!`;
+  const tally = matchTally(), g = S.games[S.games.length - 1];
+  document.getElementById('winBody').innerHTML = lines +
+    `<p class="matchline">+${g.pts} game point${g.pts > 1 ? 's' : ''} · Match: ` +
+    [...Array(S.n).keys()].map(l => `${esc(S.names[l])} <b>${tally[l]}</b>`).join(' – ') + `</p>` + rivalryLine();
+  setTimeout(() => {                                   // the cast reacts
+    if (S.winner !== lane) return;
+    say(frontPeg(lane), 'win', {}, 0, 3);
+    for (let l = 0; l < S.n; l++) if (l !== lane) {
+      const sc = laneScore(l);
+      say(randPeg(l), sc < 91 ? 'skunked' : 'lose', { lane }, 2600 + l * 400, 3);
+    }
+  }, skunks ? 1200 : 400);
+  setTimeout(() => { if (S.winner === lane) document.getElementById('win').classList.add('show'); }, skunks ? 4600 : 700);
+}
+
+/* ================== Celebrations ================== */
+function pegScreen(p) { const m = svg.getScreenCTM(); return [p.p.x * m.a + m.e, p.p.y * m.d + m.f]; }
+function bigWord(html, mid) {
+  const big = document.getElementById('big'), token = ++bigWord.n;
+  big.innerHTML = `<div class="word go ${mid ? 'mid' : ''}">${html}</div>`;
+  setTimeout(() => { if (bigWord.n === token) big.innerHTML = ''; }, 2700);
+}
+bigWord.n = 0;
+function shake() { document.body.classList.remove('shake'); void document.body.offsetWidth; document.body.classList.add('shake'); }
+function celebrate(peg, pts) {
+  const name = esc(S.names[peg.lane]), c = col(peg.lane), [x, y] = pegScreen(peg);
+  const colors = [c.base, c.light, '#f6dc8e', '#fff'];
+  if (pts === 19) {                         // there is no 19 hand, so "nineteen" means zero
+    toast('Moving 19? Bold. (In cribbage, "nineteen" means zero 😏)');
+    boing();
+    return;
+  }
+  pegs.forEach(p => { if (p.lane === peg.lane) p.sv = 0.35; });
+  if (pts === 29) {
+    fanfare(); shake();
+    bigWord(`TWENTY-NINE!<small>${name} found the perfect hand</small>`);
+    rain(['#f6dc8e', '#fff3c4', '#e2b956', c.base, c.light], 380);
+    [0, 350, 700, 1050, 1400].forEach((d, i) => setTimeout(() => {
+      boom(); confetti(innerWidth * (0.2 + Math.random() * 0.6), innerHeight * (0.2 + Math.random() * 0.35), colors, 90);
+    }, 300 + d));
+  } else if (pts >= 24) {
+    bigWord(`${pts === 28 ? 'TWENTY-EIGHT' : pts === 24 ? 'TWENTY-FOUR' : '+' + pts}!<small>${name} is on fire</small>`, true);
+    [0, 420, 840].forEach(d => setTimeout(() => {
+      boom(); confetti(innerWidth * (0.2 + Math.random() * 0.6), innerHeight * (0.2 + Math.random() * 0.3), colors, 110);
+    }, d));
+  } else {
+    cheer();
+    confetti(x, y, colors, 70);
+    toast(`${pts === 12 ? 'Twelve' : 'Big hand'}! ${S.names[peg.lane]} +${pts} 🎉`);
+  }
+}
+
+function skunkParade(count) {
+  const r = svg.getBoundingClientRect(), dur = 3600;
+  for (let i = 0; i < count; i++) {
+    const el = document.createElement('div');
+    el.className = 'skunk'; el.innerHTML = '<span>🦨</span>';
+    document.body.appendChild(el);
+    const y = r.top + r.height * (count === 1 ? 0.5 : 0.32 + i * 0.36) - 32;
+    const start = performance.now() + i * 700;
+    let lastPuff = 0, puffs = 0;
+    const tickParade = now => {
+      const t = (now - start) / dur;
+      if (t < 0) { requestAnimationFrame(tickParade); return; }
+      const x = -90 + t * (innerWidth + 180);
+      el.style.transform = `translate(${x}px,${y}px)`;
+      if (now - lastPuff > 230 && t < 1) {
+        lastPuff = now; puffs++;
+        const s = document.createElement('div');
+        s.className = 'stink';
+        s.style.left = (x + 4) + 'px'; s.style.top = (y + 40) + 'px';
+        s.addEventListener('animationend', () => s.remove());
+        document.body.appendChild(s);
+        if (puffs % 3 === 1) fart();
+      }
+      if (t < 1) requestAnimationFrame(tickParade); else el.remove();
+    };
+    requestAnimationFrame(tickParade);
+  }
+  toast(count === 2 ? 'DOUBLE SKUNK! 🦨🦨' : 'SKUNKED! 🦨');
+}
+function hideWin() { document.getElementById('win').classList.remove('show'); }
+
+/* ================== Match tracking ================== */
+// A win is worth 1 game point, a skunk 2, a double skunk 3 (common house rule).
+function matchTally() { const t = [0, 0, 0, 0]; S.games.forEach(g => { t[g.w] += g.pts; }); return t; }
+function recordGame(lane, skunks) {
+  const g = { w: lane, pts: 1 + skunks, sk: skunks, n: S.n, names: S.names.slice(0, S.n),
+    scores: [...Array(S.n).keys()].map(laneScore), best: S.cur.best.slice(0, S.n), def: S.cur.def.slice(0, S.n), at: Date.now() };
+  S.games.push(g); S.life.push(g);
+  console.log(`[cribbage] game ${S.games.length} recorded: ${S.names[lane]} +${1 + skunks}`);
+  save(); renderPlaques(); renderMatch();
+}
+function renderMatch() {
+  const el = document.getElementById('match');
+  if (!S.games.length) { el.innerHTML = ''; return; }
+  const t = matchTally();
+  const totals = [...Array(S.n).keys()].map(l =>
+    `<span class="tot" style="--c:${col(l).base}"><i></i>${esc(S.names[l])} <b>${t[l]}</b></span>`).join('');
+  const rows = S.games.map((g, i) => {
+    const order = [...g.scores.keys()].sort((a, b) => g.scores[b] - g.scores[a]);
+    const line = order.map(l => `${esc(g.names[l] || `Player ${l + 1}`)} ${g.scores[l]}`).join(' · ');
+    const when = new Date(g.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const badge = g.sk === 2 ? '<span class="sk">double skunk 🦨🦨</span>' : g.sk === 1 ? '<span class="sk">skunk 🦨</span>' : '';
+    return `<li><span class="gn">#${i + 1}</span><span class="gw" style="--c:${col(g.w).base}">${esc(g.names[g.w] || `Player ${g.w + 1}`)}</span>
+      <span class="gs">${line}</span>${badge}<span class="gp">+${g.pts}</span><span class="gt">${when}</span></li>`;
+  }).reverse().join('');
+  el.innerHTML = `<div class="mhead"><h2>Match · ${S.games.length} game${S.games.length > 1 ? 's' : ''}</h2>
+    <div class="tots">${totals}</div><button class="btn small" id="resetMatch">Reset match</button></div><ol>${rows}</ol>`;
+  el.querySelector('#resetMatch').onclick = () => {
+    if (!confirm('Clear all game results for this match?')) return;
+    S.games = []; save(); renderPlaques(); renderMatch(); tock(0.6);
+  };
+}
+
+/* ================== All-time rivalry ================== */
+// Games played between the current set of player names, across every match (Reset match doesn't touch it).
+function rivalryData() {
+  const n = S.n, names = S.names.slice(0, n), key = s => String(s).trim().toLowerCase();
+  const games = S.life.map(g => ({ g, ix: names.map(nm => (g.names || []).findIndex(x => key(x) === key(nm))) }))
+    .filter(r => r.g.n === n && r.ix.every(i => i >= 0) && new Set(r.ix).size === n);
+  const st = names.map(() => ({ w: 0, pts: 0, sk: 0, dsk: 0, best: 0, n29: 0, cb: 0, close: null, blow: 0, lossSum: 0, losses: 0, run: 0, bestRun: 0 }));
+  const form = [];
+  games.forEach(({ g, ix }) => {
+    const wl = ix.indexOf(g.w); if (wl < 0) return;
+    const others = ix.filter((_, l) => l !== wl).map(i => g.scores[i]), margin = 121 - Math.max(...others);
+    st.forEach((s, l) => {
+      const b = (g.best && g.best[ix[l]]) || 0;
+      s.best = Math.max(s.best, b); if (b === 29) s.n29++;
+      if (l !== wl) { s.lossSum += g.scores[ix[l]]; s.losses++; s.run = 0; }
+    });
+    const s = st[wl];
+    s.w++; s.pts += g.pts; if (g.sk >= 1) s.sk++; if (g.sk === 2) s.dsk++;
+    s.cb = Math.max(s.cb, (g.def && g.def[g.w]) || 0);
+    s.close = s.close === null ? margin : Math.min(s.close, margin);
+    s.blow = Math.max(s.blow, margin);
+    s.run++; s.bestRun = Math.max(s.bestRun, s.run);
+    form.push({ l: wl, sk: g.sk, at: g.at });
+  });
+  return { names, games, st, form };
+}
+function rivalryLine() {
+  const { names, games, st } = rivalryData();
+  if (games.length < 2) return '';
+  const hot = st.findIndex(s => s.run >= 2);
+  return `<p>All-time: ${names.map((nm, l) => `${esc(nm)} <b>${st[l].w}</b>`).join(' – ')}` +
+    (hot >= 0 ? ` · ${esc(names[hot])} has won ${st[hot].run} straight 🔥` : '') + `</p>`;
+}
+function renderRivalry() {
+  const { names, games, st, form } = rivalryData(), body = document.getElementById('rivBody');
+  if (!games.length) {
+    body.innerHTML = `<p class="rsub">No games on record between ${names.map(esc).join(' and ')} yet.<br>Finish a game and the grudge begins.</p>`;
+    return;
+  }
+  const order = [...st.keys()].sort((a, b) => st[b].w - st[a].w);
+  let head;
+  if (st[order[0]].w === st[order[1]].w) head = `All square at ${st[order[0]].w} apiece`;
+  else head = `${esc(names[order[0]])} leads ${order.map(l => st[l].w).join('–')}`;
+  const hot = st.findIndex(s => s.run >= 2);
+  const first = new Date(games[0].g.at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+  const dots = form.slice(-24).map(f => { const c = col(f.l); return `<i class="${f.sk ? 'sk' : ''}" style="--c:${c.base};--cl:${c.light};--cd:${c.dark}" title="${esc(names[f.l])}${f.sk ? ' (skunk)' : ''}"></i>`; }).join('');
+  // rows: [label, value per lane, higher-is-better?]
+  const rows = [
+    ['Games won', s => s.w, 1],
+    ['Win rate', s => Math.round(100 * s.w / games.length) + '%', 1, s => s.w],
+    ['Game points', s => s.pts, 1],
+    ['Current streak', s => s.run ? `${s.run} 🔥`.replace(/^1 🔥$/, '1') : '–', 1, s => s.run],
+    ['Longest streak', s => s.bestRun || '–', 1, s => s.bestRun],
+    ['Skunks dealt 🦨', s => s.sk, 1],
+    ['Double skunks 🦨🦨', s => s.dsk, 1],
+    ['Biggest single peg', s => s.best || '–', 1, s => s.best],
+    ['29 hands', s => s.n29, 1],
+    ['Biggest comeback', s => s.cb ? `from ${s.cb} down` : '–', 1, s => s.cb],
+    ['Closest win', s => s.close === null ? '–' : `by ${s.close}`, 0, s => s.close === null ? Infinity : s.close],
+    ['Biggest blowout', s => s.blow ? `by ${s.blow}` : '–', 1, s => s.blow],
+    ['Avg score in a loss', s => s.losses ? Math.round(s.lossSum / s.losses) : '–', 1, s => s.losses ? s.lossSum / s.losses : -1],
+  ];
+  const tr = rows.map(([label, f, hi, key]) => {
+    const k = key || f, vals = st.map(k), best = hi ? Math.max(...vals) : Math.min(...vals);
+    const tops = vals.filter(v => v === best).length;
+    return `<tr><td>${label}</td>${st.map((s, l) => `<td class="${tops === 1 && vals[l] === best && best !== Infinity && best > (hi ? 0 : -1) ? 'top' : ''}">${f(s)}</td>`).join('')}</tr>`;
+  }).join('');
+  body.innerHTML = `<div class="rhead">${head}</div>
+    <p class="rsub">${games.length} game${games.length > 1 ? 's' : ''} since ${first}${hot >= 0 ? ` · ${esc(names[hot])} is on a ${st[hot].run}-game heater` : ''}</p>
+    <div class="form" title="Last ${Math.min(24, form.length)} games, oldest first">${dots}</div>
+    <table class="rtab"><tr><th></th>${names.map((nm, l) => `<th style="--c:${col(l).base}">${esc(nm)}</th>`).join('')}</tr>${tr}</table>
+    <div class="rnote">Counts every game these ${names.length === 2 ? 'two' : names.length} names have finished together, across matches. Game points: win 1, skunk 2, double skunk 3.</div>`;
+}
+function openRivalry() { renderRivalry(); document.getElementById('riv').classList.add('show'); }
+document.getElementById('rivBtn').onclick = () => { audio(); pick(); openRivalry(); };
+document.getElementById('rivClose').onclick = () => document.getElementById('riv').classList.remove('show');
+document.getElementById('riv').addEventListener('click', e => { if (e.target.id === 'riv') e.currentTarget.classList.remove('show'); });
+document.getElementById('rivClear').onclick = () => {
+  if (!confirm('Erase the ENTIRE all-time record for every player? This can\'t be undone.')) return;
+  S.life = []; save(); renderRivalry(); tock(0.6);
+};
+
+/* ================== Plaques / UI ================== */
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+function renderPlaques() {
+  const el = document.getElementById('plaques');
+  el.innerHTML = '';
+  const tally = matchTally();
+  for (let l = 0; l < S.n; l++) {
+    const c = col(l), d = document.createElement('div');
+    d.className = 'plaque';
+    d.style.cssText = `--c:${c.base};--cl:${c.light};--cd:${c.dark}`;
+    const castNames = [l * 2, l * 2 + 1].map(id => `<i data-p="${id}" title="Say hi">${esc(CAST[S.cast[id]].name)}</i>`).join(' &amp; ');
+    d.innerHTML = `<button class="pegdot" title="Change peg color" aria-label="Change peg color"></button>
+      <div class="nm"><input maxlength="18" aria-label="Player name" ${NET.role ? 'readonly' : ''} value="${esc(S.names[l])}"><span class="cast">${castNames}</span></div>
+      ${S.games.length ? `<span class="games" title="Game points this match">🏆 ${tally[l]}</span>` : ''}
+      <span class="score" data-l="${l}">${laneScore(l)}</span>`;
+    d.querySelector('input').addEventListener('input', e => { S.names[l] = e.target.value || `Player ${l + 1}`; save(); renderMatch(); });
+    d.querySelector('.pegdot').addEventListener('click', e => { e.stopPropagation(); audio(); pick(); openPicker(l, e.currentTarget); });
+    d.querySelectorAll('.cast i').forEach(c => c.addEventListener('click', () => { audio(); bump(); say(pegs[+c.dataset.p], 'intro', {}, 0, 3); }));
+    el.appendChild(d);
+  }
+  document.getElementById('countSeg').innerHTML = [2, 3, 4].map(n => `<button class="btn ${S.n === n ? 'on' : ''}" data-n="${n}">${n}</button>`).join('');
+  updateMute();
+}
+function refreshPlaques(only) {
+  document.querySelectorAll('.score').forEach(el => {
+    const l = +el.dataset.l, v = String(laneScore(l));
+    if (el.textContent !== v) {
+      el.textContent = v;
+      if (only === undefined || only === l) { el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop'); }
+    }
+  });
+}
+document.getElementById('countSeg').addEventListener('click', e => {
+  const b = e.target.closest('[data-n]'); if (!b) return;
+  const n = +b.dataset.n; if (n === S.n) return;
+  if (pegs.some(p => holeN(p.hole) > 0) && !confirm('Changing players starts a new game. Continue?')) return;
+  newGame(n);
+});
+document.getElementById('undoBtn').onclick = () => { audio(); undo(); };
+document.getElementById('newBtn').onclick = () => {
+  audio();
+  if (S.winner === null && pegs.some(p => holeN(p.hole) > 0) && !confirm('Pull all the pegs and start over?')) return;
+  newGame();
+};
+document.getElementById('rematchBtn').onclick = () => { audio(); newGame(); };
+document.getElementById('admireBtn').onclick = hideWin;
+document.getElementById('muteBtn').onclick = () => { S.muted = !S.muted; if (S.muted) hush(); save(); updateMute(); audio(); tock(0.6); };
+function updateMute() { document.getElementById('muteBtn').textContent = S.muted ? '🔇 Sound' : '🔊 Sound'; }
+
+/* ================== Color picker ================== */
+const picker = document.getElementById('picker');
+let pickerLane = null;
+function openPicker(l, anchor) {
+  if (pickerLane === l && picker.classList.contains('show')) { closePicker(); return; }
+  pickerLane = l;
+  picker.innerHTML = `<div class="ptitle">${esc(S.names[l])}'s pegs</div><div class="swatches">` +
+    PEG_COLORS.map((c, i) => {
+      const owner = S.colors.slice(0, S.n).indexOf(i);
+      const tag = owner >= 0 && owner !== l ? `<span class="owner">${esc(S.names[owner].trim().charAt(0).toUpperCase() || owner + 1)}</span>` : '';
+      return `<button class="sw ${S.colors[l] === i ? 'cur' : ''}" data-c="${i}" title="${c.name}${owner >= 0 && owner !== l ? ` (swap with ${esc(S.names[owner])})` : ''}"
+        style="--c:${c.base};--cl:${c.light};--cd:${c.dark}">${tag}</button>`;
+    }).join('') + `</div>`;
+  const r = anchor.getBoundingClientRect();
+  picker.style.left = Math.max(12, Math.min(innerWidth - 232, r.left + scrollX - 8)) + 'px';
+  picker.style.top = (r.bottom + scrollY + 10) + 'px';
+  picker.classList.add('show');
+}
+function closePicker() { picker.classList.remove('show'); pickerLane = null; }
+picker.addEventListener('click', e => {
+  e.stopPropagation();
+  const w = e.target.closest('[data-wood]'), f = e.target.closest('[data-felt]');
+  if (w || f) {                     // skin picker stays open so you can mix and match
+    if (w) S.wood = w.dataset.wood; else S.felt = f.dataset.felt;
+    save(); applySkin(); tock(0.7);
+    picker.querySelectorAll('.skin').forEach(b => b.classList.toggle('cur', b.dataset.wood === S.wood || b.dataset.felt === S.felt));
+    return;
+  }
+  const b = e.target.closest('[data-c]'); if (!b || typeof pickerLane !== 'number') return;
+  setColor(pickerLane, +b.dataset.c);
+  closePicker();
+});
+
+/* ================== Board & table skins ================== */
+function openSkinPicker(anchor) {
+  if (pickerLane === 'skin' && picker.classList.contains('show')) { closePicker(); return; }
+  pickerLane = 'skin';
+  const woodBtns = Object.entries(WOODS).map(([k, w]) =>
+    `<button class="skin ${S.wood === k ? 'cur' : ''}" data-wood="${k}" title="${w.name}" style="--bg:linear-gradient(170deg,${w.stops.join(',')})"></button>`).join('');
+  const feltBtns = Object.entries(FELTS).map(([k, f]) =>
+    `<button class="skin ${S.felt === k ? 'cur' : ''}" data-felt="${k}" title="${f.name}" style="--bg:radial-gradient(circle at 50% 35%,${f.c.join(',')})"></button>`).join('');
+  picker.innerHTML = `<div class="ptitle">Board wood</div><div class="skinrow">${woodBtns}</div><div class="ptitle">Table felt</div><div class="skinrow">${feltBtns}</div>`;
+  const r = anchor.getBoundingClientRect();
+  picker.style.left = Math.max(12, Math.min(innerWidth - 232, r.right + scrollX - 220)) + 'px';
+  picker.style.top = (r.bottom + scrollY + 10) + 'px';
+  picker.classList.add('show');
+}
+function applySkin() {
+  const w = wood(), f = FELTS[S.felt] || FELTS.green, b = document.body.style;
+  b.setProperty('--f1', f.c[0]); b.setProperty('--f2', f.c[1]); b.setProperty('--f3', f.c[2]);
+  b.setProperty('--ink', w.ink); b.setProperty('--hi', w.hi);
+  const st = svg.querySelectorAll('#wood stop');
+  st.forEach((s, i) => s.setAttribute('stop-color', w.stops[i]));
+  const m1 = svg.querySelector('#grainM'), m2 = svg.querySelector('#grainM2'), edge = svg.querySelector('#edge');
+  if (m1) m1.setAttribute('values', grainM(w.grain, 2.7, -1.1));
+  if (m2) m2.setAttribute('values', grainM(w.fine, 1.8, -.75));
+  if (edge) edge.setAttribute('stroke', w.edge);
+}
+document.getElementById('skinBtn').addEventListener('click', e => { e.stopPropagation(); audio(); pick(); openSkinPicker(e.currentTarget); });
+
+/* ================== Keep the screen awake ================== */
+let wakeLock = null;
+async function keepAwake() {
+  try {
+    if (!('wakeLock' in navigator) || document.visibilityState !== 'visible' || (wakeLock && !wakeLock.released)) return;
+    wakeLock = await navigator.wakeLock.request('screen');
+    console.log('[cribbage] screen wake lock on');
+  } catch (e) { console.log('[cribbage] wake lock unavailable:', e.message); }
+}
+document.addEventListener('visibilitychange', keepAwake);
+addEventListener('pointerdown', keepAwake, { passive: true });
+document.addEventListener('click', e => { if (!picker.contains(e.target)) closePicker(); });
+addEventListener('keydown', e => { if (e.key === 'Escape') closePicker(); });
+
+function setColor(l, ci) {
+  if (S.colors[l] === ci) return;
+  const other = S.colors.indexOf(ci);
+  if (other >= 0) S.colors[other] = S.colors[l]; // swap so no two players share a color
+  S.colors[l] = ci;
+  save();
+  applyColors();
+  tock(0.8);
+  pegs.forEach(p => { if (p.lane === l || p.lane === other) p.sv = 0.3; });
+}
+function applyColors() {           // recolor in place: pegs stay exactly where they are
+  for (let l = 0; l < 4; l++) {
+    const c = col(l), g = svg.querySelector('#pg' + l);
+    if (g) { const st = g.querySelectorAll('stop'); st[0].setAttribute('stop-color', c.light); st[1].setAttribute('stop-color', c.base); st[2].setAttribute('stop-color', c.dark); }
+    svg.querySelectorAll(`.tint[data-l="${l}"]`).forEach(e => e.setAttribute('stroke', c[e.dataset.role] || c.base));
+  }
+  pegs.forEach(p => p.el.querySelector('.pb').setAttribute('stroke', col(p.lane).dark));
+  renderPlaques(); renderMatch();
+}
+
+let toastT;
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+/* ================== Sound (synthesized) ================== */
+let AC = null, lastTick = 0;
+function audio() {
+  try { if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)(); if (AC.state === 'suspended') AC.resume(); } catch (e) {}
+  return AC;
+}
+function noiseBurst(t, dur, freq, q, gain) {
+  const len = Math.max(1, Math.floor(AC.sampleRate * dur)), buf = AC.createBuffer(1, len, AC.sampleRate), d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 4);
+  const src = AC.createBufferSource(), bp = AC.createBiquadFilter(), g = AC.createGain();
+  src.buffer = buf; bp.type = 'bandpass'; bp.frequency.value = freq; bp.Q.value = q; g.gain.value = gain;
+  src.connect(bp).connect(g).connect(AC.destination); src.start(t);
+}
+function tone(t, f0, f1, dur, gain, type = 'sine') {
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.type = type; o.frequency.setValueAtTime(f0, t); if (f1) o.frequency.exponentialRampToValueAtTime(f1, t + dur * 0.6);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(gain, t + 0.004); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g).connect(AC.destination); o.start(t); o.stop(t + dur + 0.02);
+}
+function tock(I = 1) {               // wooden peg seating into a hole
+  if (S.muted || !AC) return;
+  const t = AC.currentTime, f = 430 + Math.random() * 90;
+  tone(t, f, f * 0.55, 0.13, 0.45 * I);
+  tone(t, f * 2.7, f * 2.2, 0.05, 0.08 * I);
+  noiseBurst(t, 0.03, 1900 + Math.random() * 700, 1.3, 0.7 * I);
+}
+function pick() {                    // lifting a peg out
+  if (S.muted || !AC) return;
+  const t = AC.currentTime;
+  noiseBurst(t, 0.02, 3200, 2, 0.25);
+  tone(t, 900, 1300, 0.05, 0.05);
+}
+function tick() {                    // ratchet as the peg passes over holes
+  if (S.muted || !AC) return;
+  const now = performance.now(); if (now - lastTick < 28) return; lastTick = now;
+  noiseBurst(AC.currentTime, 0.012, 4200 + Math.random() * 800, 3, 0.18);
+}
+function chime() {
+  if (S.muted || !AC) return;
+  const t = AC.currentTime;
+  [523.25, 659.25, 783.99, 1046.5, 1318.5, 1568].forEach((f, i) => {
+    tone(t + i * 0.085, f, null, 1.1, 0.12, 'triangle');
+    tone(t + i * 0.085, f * 2, null, 0.6, 0.03);
+  });
+}
+function voice(t, f, dur, gain, type, cutoff, vib = 0, vibRate = 5.5) { // filtered oscillator with optional vibrato
+  const o = AC.createOscillator(), lp = AC.createBiquadFilter(), g = AC.createGain();
+  o.type = type; o.frequency.setValueAtTime(f, t);
+  if (vib) { const l = AC.createOscillator(), lg = AC.createGain(); l.frequency.value = vibRate; lg.gain.value = vib; l.connect(lg).connect(o.frequency); l.start(t); l.stop(t + dur + 0.05); }
+  lp.type = 'lowpass'; lp.frequency.value = cutoff; lp.Q.value = 2;
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(gain, t + 0.03);
+  g.gain.setValueAtTime(gain, t + Math.max(0.03, dur - 0.08)); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(lp).connect(g).connect(AC.destination); o.start(t); o.stop(t + dur + 0.05);
+  return o;
+}
+function cheer() {
+  if (S.muted || !AC) return;
+  const t = AC.currentTime;
+  [659.25, 830.6, 987.8, 1318.5].forEach((f, i) => tone(t + i * 0.06, f, null, 0.5, 0.11, 'triangle'));
+  for (let i = 0; i < 6; i++) noiseBurst(t + 0.25 + i * 0.05, 0.015, 6000 + Math.random() * 3000, 4, 0.12);
+}
+function boom() {
+  if (S.muted || !AC) return;
+  const t = AC.currentTime;
+  tone(t, 140, 38, 0.6, 0.5);
+  noiseBurst(t, 0.25, 500, 0.7, 0.9);
+  for (let i = 0; i < 14; i++) noiseBurst(t + 0.15 + Math.random() * 0.7, 0.01, 5000 + Math.random() * 4000, 5, 0.1 + Math.random() * 0.1);
+}
+function fanfare() {
+  if (S.muted || !AC) return;
+  const t = AC.currentTime + 0.05;
+  const notes = [[392, .14], [523.25, .14], [659.25, .14], [784, .42], [659.25, .14], [784, 1.1]];
+  let at = t;
+  notes.forEach(([f, d]) => {
+    voice(at, f, d + 0.05, 0.13, 'sawtooth', 2400, d > 0.4 ? 6 : 0);
+    voice(at, f / 2, d + 0.05, 0.07, 'square', 1200);
+    at += d;
+  });
+  setTimeout(chime, (at - AC.currentTime) * 1000 - 300);
+}
+function boing() {
+  if (S.muted || !AC) return;
+  const t = AC.currentTime, o = AC.createOscillator(), g = AC.createGain(), l = AC.createOscillator(), lg = AC.createGain();
+  o.type = 'sine'; o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(520, t + 0.5);
+  l.frequency.setValueAtTime(22, t); lg.gain.setValueAtTime(80, t); lg.gain.exponentialRampToValueAtTime(1, t + 0.55);
+  l.connect(lg).connect(o.frequency);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.35, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.6);
+  o.connect(g).connect(AC.destination); o.start(t); l.start(t); o.stop(t + 0.65); l.stop(t + 0.65);
+}
+function fart() {
+  if (S.muted || !AC) return;
+  const t = AC.currentTime, dur = 0.35 + Math.random() * 0.35, base = 70 + Math.random() * 40;
+  const o = voice(t, base, dur, 0.32, 'sawtooth', 380 + Math.random() * 200, 18, 18 + Math.random() * 14);
+  o.frequency.exponentialRampToValueAtTime(base * 0.7, t + dur);
+  noiseBurst(t, dur * 0.8, 220, 0.8, 0.5);
+}
+
+/* ================== Confetti ================== */
+const fx = document.getElementById('fx'), fctx = fx.getContext('2d');
+let parts = [], fxRunning = false;
+function fxStart() {
+  const dpr = devicePixelRatio || 1, w = Math.round(innerWidth * dpr), h = Math.round(innerHeight * dpr);
+  if (fx.width !== w || fx.height !== h) { fx.width = w; fx.height = h; }
+  fctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  if (!fxRunning) { fxRunning = true; requestAnimationFrame(fxLoop); }
+}
+function confetti(x, y, colors, count = 220) {
+  for (let i = 0; i < count; i++) {
+    const a = -Math.PI / 2 + (Math.random() - 0.5) * 2.2, sp = 6 + Math.random() * 12;
+    parts.push({ x, y, vx: Math.cos(a) * sp + 2, vy: Math.sin(a) * sp, r: Math.random() * 6.28, vr: (Math.random() - .5) * .4,
+      w: 5 + Math.random() * 6, h: 3 + Math.random() * 4, c: colors[i % colors.length], life: 0, g: 0.28 });
+  }
+  fxStart();
+}
+function rain(colors, count) {                // gentle confetti shower from the top of the screen
+  for (let i = 0; i < count; i++) {
+    parts.push({ x: Math.random() * innerWidth, y: -20 - Math.random() * innerHeight * 0.8, vx: (Math.random() - .5) * 2, vy: 1 + Math.random() * 2,
+      r: Math.random() * 6.28, vr: (Math.random() - .5) * .3, w: 6 + Math.random() * 7, h: 3 + Math.random() * 4,
+      c: colors[i % colors.length], life: 0, g: 0.05 });
+  }
+  fxStart();
+}
+function fxLoop() {
+  fctx.clearRect(0, 0, innerWidth, innerHeight);
+  parts = parts.filter(p => p.y < innerHeight + 30 && p.life < 600);
+  for (const p of parts) {
+    p.life++; p.vy += p.g; p.vx *= 0.985; p.vy *= 0.985; p.x += p.vx; p.y += p.vy; p.r += p.vr;
+    fctx.save(); fctx.translate(p.x, p.y); fctx.rotate(p.r); fctx.scale(1, Math.cos(p.life * 0.15 + p.r));
+    fctx.fillStyle = p.c; fctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h); fctx.restore();
+  }
+  if (parts.length) requestAnimationFrame(fxLoop); else { fxRunning = false; fctx.clearRect(0, 0, innerWidth, innerHeight); }
+}
+
+/* ================== The cast ================== */
+// Every peg gets a personality. Tokens: {me} this peg, {pal} its partner peg, {player} its owner,
+// {them}/{foe}/{theirScore} the rival player, their peg and score, {pts} points just pegged, {gap} the lead.
+const CAST = {
+  reggie: { name: 'Sir Reginald', pitch: 175, lines: {
+    intro: ["Sir Reginald Pegsworth III. Do curtsy.", "Ah, a fresh board. It smells of old money.", "I shall be pegging today on behalf of the Crown."],
+    poke: ["Unhand me, peasant!", "Do you have ANY idea who my father was? A very nice tree.", "That was a royal pegbone, you brute.", "I'll have you flogged. Gently. By a solicitor."],
+    lift: ["Gently! I'm an heirloom.", "Carry me as you would a crown.", "Mind the varnish, it's older than you."],
+    move: ["Onward, as the Pegsworths always have.", "A dignified stride, if I say so myself.", "Pardon me, {pal}. Breeding before beauty.", "Hole {score}. Rather nice. Good drainage."],
+    small: ["{pts}? I tip the doorman more than that.", "A modest gain. Quietly tasteful.", "We shall call that 'strategic restraint'."],
+    big: ["{pts} points! Have the servants ring the bells!", "Breeding tells, {them}. Breeding TELLS.", "Fetch the portrait painter. Capture my good side. Both sides."],
+    envy: ["{pts}? Surely the cards were marked.", "Beginner's luck has such a vulgar smell.", "I shall be writing a strongly worded letter about that."],
+    overtake: ["Make way, {foe}. Nobility coming through.", "Do keep up, {them}. Or don't. I'm enjoying the view.", "Pardon me. Actually, no. I'm not sorry."],
+    overtaken: ["How DARE you pass me, {foe}!", "This is a coup! I demand a recount!", "{them} pegs with the manners of a goat."],
+    skipped: ["{pal}, it was MY turn to leap. Etiquette!", "The back peg LEAPS, {pal}. Did you not attend finishing school?"],
+    stink: ["The stink hole. How utterly common.", "One hole from glory and it smells of feet."],
+    escape: ["Out of the gutter at last. Dreadful neighbourhood.", "Skunk territory behind us. Burn the map."],
+    fear: ["{them} is at {theirScore}. Fetch my smelling salts.", "Steady, Reginald. Pegsworths do not panic. Pegsworths panic QUIETLY.", "I feel faint. Someone fan me with a jack."],
+    leer: ["Comfortable back there, {foe}?", "I'd wave, {foe}, but you're so very far away.", "{gap} holes, {them}. One could build a summer home in that gap.", "Look at {foe}, scrabbling about in the cheap seats."],
+    retort: ["Says the peg with the posture of a bent nail.", "I've had valets with more points than you.", "Your family tree is a twig, {foe}.", "Charming. Did your mother whittle you in the dark?"],
+    idle: ["Is there tea at this table?", "I once pegged for the Duke of Wellington's cousin's dentist.", "Somebody deal. My patience is finite and terribly expensive.", "{pal}, you're slouching."],
+    win: ["Victory! As was written in my pedigree.", "Bring the brandy. And a mirror.", "Inform the newspapers."],
+    lose: ["The board was tilted. I am certain of it.", "I let you win. It's called noblesse oblige.", "We shall never speak of this at the club."],
+    skunked: ["SKUNKED?! Burn this board. Salt the felt.", "Strike my name from the family Bible."],
+    undo: ["Yes, put me back. I preferred that hole's view.", "A retraction. Very wise."],
+    oops: ["Backwards?! I am not a crab!", "Reverse? A Pegsworth never reverses!"],
+  }},
+  vinnie: { name: 'Vinnie Two-Holes', pitch: 140, lines: {
+    intro: ["Name's Vinnie. Two-Holes. Don't ask.", "Nice board. Shame if somethin' happened to it.", "I'm here, I'm wood, get used to it."],
+    poke: ["Ey! I'm pegg'n here!", "You poke me again, we got a problem.", "Hands where I can see 'em, pal.", "That's assault with a deadly finger."],
+    lift: ["Easy, easy, I bruise.", "Where we goin'? Somewhere nice?", "Take me to the big holes, baby."],
+    move: ["Movin' up in the world, baby.", "Scoot over, {pal}. Vinnie's comin' through.", "Smooth. Like butter on a hot hole.", "{score}. I like the neighborhood."],
+    small: ["{pts}?! I seen bigger tips at a car wash.", "We're gonna need more than {pts}, capisce?", "Small potatoes. Real small."],
+    big: ["{pts}! FUHGEDDABOUDIT!", "Ohhh, that's what I'm TALKIN' about!", "{them}, you seein' this? Frame it. Hang it in the kitchen."],
+    envy: ["{pts}? Somebody check that deck.", "Lucky. That's all that was. Lucky.", "I know a guy who knows a guy who'd call that cheatin'."],
+    overtake: ["Bye bye, {foe}! Wave to Vinnie!", "Ey {them}, you dropped somethin'. Your lead.", "That's how we do it in the old neighborhood."],
+    overtaken: ["Ohhh, you did NOT just pass me, {foe}.", "Alright. Alright. I'm rememberin' this.", "Enjoy the view up there. Won't last."],
+    skipped: ["{pal}! The back peg jumps! Whatsamatta you?!", "Ey, I'm stuck back here like a schmuck!"],
+    stink: ["Stink hole. Smells like my uncle's car.", "One more, baby. ONE MORE."],
+    escape: ["Outta skunk town. Never goin' back.", "Skunk line's in the rearview. Ba-da-bing."],
+    fear: ["{them}'s at {theirScore}... I'm sweatin' through my varnish here.", "Ok, nobody panic. ...I'm panickin'.", "This is like the time with the thing. Bad."],
+    leer: ["Yo {foe}. How's the weather down there?", "{gap} holes back, {them}. You need directions?", "I'm just sayin', {foe}, you could walk faster.", "Ey {foe}. Ey. Look at me. Now look how far back you are."],
+    retort: ["Talk's cheap, {foe}. So are you.", "Keep yappin'. I'll be past you by Tuesday.", "Ohh, tough guy. You're a stick with a hat.", "Say that to my face. Oh wait, you can't, you're way back there."],
+    idle: ["Somebody gonna deal or we waitin' for Christmas?", "I got a cousin who's a pool cue. Real stiff guy.", "This felt's nice. Real nice. Where'd you get it?", "{pal}, you owe me twenty bucks."],
+    win: ["Told ya. Never bet against Vinnie.", "And THAT'S why they call me Two-Holes.", "Drinks are on {them}!"],
+    lose: ["This ain't over. This is NEVER over.", "Rigged. Totally rigged.", "I'm gonna make {them} an offer they can't refuse. A rematch."],
+    skunked: ["Skunked... I'm movin' to Jersey.", "We do not speak of this. To nobody. Ever."],
+    undo: ["Hey, I was comfy there!", "Back it up, back it up, beep beep."],
+    oops: ["Ey! Wrong way, genius!", "Backwards?! I ain't a shrimp!"],
+  }},
+  pip: { name: 'Pip', pitch: 540, lines: {
+    intro: ["H-hi. I'm Pip. Please don't drop me.", "Is it... is it starting? Already?", "I'm just happy to be in a hole."],
+    poke: ["EEP!", "Was that on purpose?! Was it?!", "I'm fine. I'm FINE. Please stop.", "My whole life flashed before my eyes. It was mostly holes."],
+    lift: ["Too high! Too high!", "I can see my house from here. I hate it.", "Put me down put me down put me down"],
+    move: ["Ok. Ok. New hole. New hole is fine.", "Is this hole clean? It feels damp.", "Sorry {pal}! Sorry! Coming through! Sorry!", "I made it. I'm alive. Hole {score}."],
+    small: ["{pts} is good! Nobody notices {pts}.", "Small steps. Small, safe steps.", "Under the radar. Like a little mouse."],
+    big: ["{pts}?! Everyone's LOOKING at me!", "Oh no. I'm doing well. Now they'll come for me.", "Too much! Put some back! ...No, keep it."],
+    envy: ["{pts}?! Oh no. Oh no no no.", "Is that allowed? Can they DO that?", "I'm going to be sick. Do pegs get sick?"],
+    overtake: ["Sorry, {foe}! So sorry! Didn't mean it! ...Kind of meant it.", "I passed someone. I've never passed anyone. Is this power?"],
+    overtaken: ["It's ok. Being behind is safer. Nobody shoots the back peg.", "Please don't look at me, {foe}.", "{foe} went by so fast I felt a breeze."],
+    skipped: ["{pal}... you left me? Back here? Alone?", "Um. I think I was supposed to go. It's ok. It's fine. It's fine."],
+    stink: ["It smells AWFUL in here. Get me out get me out.", "One hole left. Too much pressure. TOO MUCH."],
+    escape: ["We're out of skunk land! I can breathe!", "Phew. Phew phew phew phew."],
+    fear: ["{them} has {theirScore}. I'm sweating. Can pegs sweat? I'm SWEATING.", "This is how it ends. In a hole. In a board.", "Don't look at {foe}. Don't look. ...I looked."],
+    leer: ["Um. You're... behind, {foe}. Sorry.", "{gap} holes ahead! Please don't be mad.", "Is this gloating? Am I gloating? It feels nice. I'm scared."],
+    retort: ["Please don't say mean things. I'll cry sap.", "That... that hurt my grain.", "I'm telling {player}.", "...ok that was mean but also kind of fair."],
+    idle: ["Did anyone else hear a noise?", "What if the table tips over?", "I counted the holes. There's a lot. Too many.", "{pal}? You still there? Ok good."],
+    win: ["I WON? Is that bad? It feels good. Is that bad?", "Nobody's hurt? We all made it? Good. Good."],
+    lose: ["It's ok. Losing is quiet. I like quiet.", "I knew this would happen. I KNEW it."],
+    skunked: ["Skunked. I'll just... live in the box now.", "I'm going to need a long nap in the drawer."],
+    undo: ["Oh thank goodness. I hated that hole.", "Back. Back is safe."],
+    oops: ["Why are we going BACKWARDS?!", "Reverse? Is something chasing us?!"],
+  }},
+  vex: { name: 'Countess Vex', pitch: 230, lines: {
+    intro: ["Countess Vex has arrived. Tremble, felt.", "At last... a board worthy of my schemes.", "You may call me Countess. Or Your Darkness."],
+    poke: ["You DARE lay a finger on the Countess?", "Touch me again and I curse your crib.", "Mwahaha. Ha. Stop that.", "Your fingerprints have been noted. In my BOOK."],
+    lift: ["I RISE!", "Behold, I ascend!", "Lift me higher, minion."],
+    move: ["Another hole falls under my dominion.", "Step aside, {pal}. Destiny waits for no peg.", "The plan proceeds exactly as foreseen.", "Hole {score}. It's mine now. They're all mine."],
+    small: ["{pts}. A mere pawn's step. All part of the plan.", "Patience. Darkness moves slowly.", "Small, yes. Like a poisoned dart."],
+    big: ["{pts}! EXACTLY as I foretold! MWAHAHAHA!", "Kneel, {them}. Kneel before the Countess.", "The prophecy is FULFILLED!"],
+    envy: ["{pts}?! You'll pay for that, {foe}.", "Enjoy it, {them}. Enjoy it while it lasts.", "I shall add that to my list of grudges. It is a LONG list."],
+    overtake: ["Your reign is ended, {foe}.", "I pass you as night passes day, {them}.", "Fall behind me where you belong, {foe}."],
+    overtaken: ["Betrayal! Treachery! I'll have your grain for this!", "Laugh now, {foe}. I'll laugh LAST. And longer. And louder."],
+    skipped: ["{pal}, you FOOL! The rear guard leaps! It's the oldest strategy!", "Abandoning me, {pal}? I will remember this. I remember EVERYTHING."],
+    stink: ["The stink hole. Even villains have limits.", "One hole from total domination!"],
+    escape: ["The skunk line cannot hold me!", "Free! As the shadows were always meant to be!"],
+    fear: ["{them} draws near the end... impossible. IMPOSSIBLE.", "No... this wasn't in the prophecy...", "{foe} at {theirScore}?! Summon my minions! ...I have no minions."],
+    leer: ["Gaze upon me, {foe}. It's the closest you'll get to first.", "{gap} holes, {them}. A chasm of despair.", "Do you feel it, {foe}? That's hopelessness.", "I'm not laughing at you, {foe}. Mwaha. Ok I am."],
+    retort: ["Your insults amuse me. Briefly.", "Bold words for a peg in my shadow.", "I've devoured stronger pegs for breakfast.", "Cute. I'll have that carved on your tombstone."],
+    idle: ["The silence... it BORES me.", "Soon. Soon this whole board will be mine.", "I've already written my victory speech. It's four hours long.", "{pal}, fetch me a goblet. Of sap."],
+    win: ["VICTORY! Bow, all of you! BOW!", "The board is mine! MWAHAHAHA!", "Darkness reigns at 121!"],
+    lose: ["Curses! Foiled by a stack of paper!", "This is merely act one.", "You haven't seen the last of Countess Vex!"],
+    skunked: ["Skunked... the Countess... SKUNKED?! NOOOO!", "Strike this from the history books!"],
+    undo: ["Time itself bends to my will!", "Rewind! The Countess commands it!"],
+    oops: ["A tactical retreat. TACTICAL.", "I meant to do that. Evil is unpredictable."],
+  }},
+  chad: { name: 'Chad', pitch: 125, lines: {
+    intro: ["Chad here. Let's GET IT.", "Pre-game stretch. Hole. Hole. Hole. Ok I'm ready.", "Who's ready to PEG?!"],
+    poke: ["Bro. Feel that? Solid grain.", "Poke me again, I'm flexing.", "That's 100% hardwood, bro.", "Careful, I'm basically a dumbbell."],
+    lift: ["Spot me! Spot me!", "Lift day, baby!", "Higher! Feel the burn!"],
+    move: ["Gains, bro. GAINS.", "Out the way {pal}, I'm on a run.", "Hole after hole. That's discipline.", "{score} and climbing. No days off."],
+    small: ["{pts} points. Warm-up set.", "Every rep counts, bro. Even tiny ones.", "Light day. Active recovery."],
+    big: ["{pts}?! PERSONAL RECORD!", "THAT'S A PR, {them}! Write it in the log!", "Feel the PUMP! FEEL IT!"],
+    envy: ["{pts}? Sus. Real sus.", "Ok {foe}, that was kinda jacked. I hate it.", "Bro is juicing. {foe} is definitely juicing."],
+    overtake: ["Lapped you, {foe}. Cardio's important.", "Catch me if you can, {them}. Spoiler: you can't.", "On your left, {foe}!"],
+    overtaken: ["Whatever bro, I'm saving energy.", "You think you're better than me, {foe}? ...You are right now. For now."],
+    skipped: ["{pal}! Skip leg day, fine, but don't skip ME.", "Bro, I'm the back peg. I leapfrog. That's the whole workout."],
+    stink: ["Stink hole smells like my gym bag.", "Last rep! PUSH IT!"],
+    escape: ["Skunk line crushed. Next set.", "Out of skunk zone! Bro hug!"],
+    fear: ["{them} at {theirScore}. Bro... I'm kinda scared.", "Breathe in. Breathe out. Don't let them see the sweat.", "My pump is gone. Where'd my pump go."],
+    leer: ["{gap} holes behind, {foe}? Need a protein shake?", "Looking small back there, {foe}.", "Yo {them}, you even peg?", "{foe}, I can see your whole posture from here. Weak."],
+    retort: ["Cool story. Do you lift?", "Bro you're all bark, no hardwood.", "I bench more points than you, {foe}.", "Ok that one hurt. Doesn't matter. I'm jacked."],
+    idle: ["Anybody wanna arm wrestle? I don't have arms.", "Hydrate. Wait, I'm wood. Don't hydrate.", "Chest day tomorrow. Every day is chest day.", "{pal}, spot me while I stand here."],
+    win: ["CHAMPION! Protein shakes for EVERYONE!", "Gains secured. Game over.", "Who's the GOAT? This peg. This peg is."],
+    lose: ["Rest day. That's all that was.", "Gonna hit the drawer and think about this.", "Good game bro. Not really. But good game."],
+    skunked: ["Skunked?! I need to go cry in the sauna.", "Bro. Brooo. Brooooooo."],
+    undo: ["Undo? That's a negative rep.", "Reset! Good form matters."],
+    oops: ["Bro we're going backwards. That's not a lift.", "Reverse lunge? Ok I respect it."],
+  }},
+  dusty: { name: 'Old Dusty', pitch: 105, lines: {
+    intro: ["Been peggin' this board since '74. Seen things.", "Another game, eh? My knots ache.", "Howdy. Don't mind the creak. That's me."],
+    poke: ["Quit pokin', young'un.", "Back in my day, nobody poked a peg.", "Mind the splinters. Some of 'em are mine.", "Poke me again and I'll tell you about the war."],
+    lift: ["Easy on the old grain.", "Whoa there, my back!", "Air up here's thin."],
+    move: ["Slow and steady, like a mule up a hill.", "Mosey on over, {pal}.", "Reminds me of the winter of '82. Long story.", "Hole {score}. Knew it back when it was just a dent."],
+    small: ["{pts}. Good honest work.", "Every hole's a hole, son.", "Little bit at a time. That's how the canyon got dug."],
+    big: ["{pts}! Ain't seen a hand like that since the gold rush!", "Yeehaw! Holler at the moon!", "Well butter my biscuits!"],
+    envy: ["{pts}? In my day that was illegal.", "Shucks. That was a good one, {foe}.", "Hmph. Luck. Pure dumb luck."],
+    overtake: ["Passed ya, {foe}. Don't fret, happens to everybody.", "Outta my dust, {them}.", "Old peg's still got a gallop."],
+    overtaken: ["Go on, {foe}. Turtle always wins in the end.", "Whippersnapper...", "Fine. I'll catch up after my nap."],
+    skipped: ["{pal}, the back peg jumps. Been that way since the Kaiser.", "Left me behind like an old boot."],
+    stink: ["Smells like the old mine down here.", "One more hole, then I'm takin' a nap."],
+    escape: ["Out of skunk country. Hallelujah.", "Skunk line behind us. Done this a thousand times."],
+    fear: ["{them}'s at {theirScore}. Seen this before. Didn't end well.", "Gettin' a bad feelin' in my grain.", "Tell my termites I loved 'em."],
+    leer: ["You're {gap} holes back, {foe}. Want me to send a mule?", "Need a map back there, {them}?", "I've seen glaciers move faster than {foe}."],
+    retort: ["Kid, I've been whittled by better than you.", "Talk all you like. I'll be here when you're kindling.", "That's what the last peg said. Now he's a toothpick.", "Heh. Cute. Like a sapling."],
+    idle: ["Did I ever tell you about the 29 hand of '91? Course I did.", "Back then, boards were made of REAL trees.", "Zzz... huh? Whose turn?", "{pal}, you remind me of my grandson. He was a chopstick."],
+    win: ["Still got it. Never lost it.", "Old peg, new trick.", "That's one more notch on the board. Literally."],
+    lose: ["Eh. Lost to better. Lost to worse.", "Win some, lose some, nap some."],
+    skunked: ["Skunked. Ain't happened since the Carter administration.", "Don't tell the other pegs at the home."],
+    undo: ["Back where I was. I like that hole. Warm.", "Heh. Do-overs. In my day..."],
+    oops: ["Wrong way, partner.", "Goin' backwards? My memory's doin' that too."],
+  }},
+  mabel: { name: 'Nana Mabel', pitch: 390, lines: {
+    intro: ["Hello dears. Nana Mabel's here. Don't mind me.", "Oh, you're playing? How nice. I'll just sit here.", "I brought snacks. Imaginary ones. Eat up."],
+    poke: ["Oh! Well. That's one way to say hello.", "Your hands are cold, sweetheart.", "Don't poke Nana, dear. Nana pokes back.", "Is that how your mother taught you to say hello?"],
+    lift: ["Oh my, careful with my hip.", "Whee! At my age!", "Not so high, dear, I'll get dizzy."],
+    move: ["Just scooting along, dear.", "Excuse me, {pal}. Nana's got places to be.", "Lovely. Very lovely hole.", "Hole {score}. It could use a doily."],
+    small: ["{pts}! Well, it's the thought that counts.", "Bless your heart. {pts} points.", "Every little bit helps, sweetie."],
+    big: ["{pts}? Oh, just luck, dear. MY luck.", "Nana's still got it, sweethearts!", "Write that down for the Christmas letter."],
+    envy: ["{pts}? Well! Good for you. Really. Good for you.", "That's nice, {foe}. Your mother must be so proud. Finally.", "Oh, how lovely. Do it again and I'll scream."],
+    overtake: ["Oh, did I pass you, {foe}? I'm so sorry, dear. Not really.", "Don't worry, {them}. Second place is still a place.", "Excuse me, {foe}. Old lady coming through."],
+    overtaken: ["Oh you go ahead, {foe}. Nana's fine. Nana's always fine.", "No no, it's fine. I'll just sit back here. Alone. In the cold."],
+    skipped: ["{pal}, I'm not upset. I'm just disappointed.", "Nobody waits for Nana anymore."],
+    stink: ["Oh dear, something smells. Was it you, {pal}?", "One more. Nana needs a lie-down."],
+    escape: ["Out of the skunk zone! Nana's proud of you, dear.", "We made it. Now let's not talk about it at dinner."],
+    fear: ["{them} has {theirScore}? Well. I'm not worried. I'm VERY worried.", "Oh dear. Oh dear oh dear oh dear.", "Somebody get Nana her pills."],
+    leer: ["Need a sweater back there, {foe}? It's chilly so far behind.", "You're {gap} holes back, dear. I made you a casserole. A sympathy casserole.", "Oh {them}, you're trying so hard. It's adorable.", "Look at {foe}. Bless."],
+    retort: ["That's not very nice, dear. I'll remember it at Christmas.", "Oh, I'm sure you didn't mean that. You did. But I'm sure you didn't.", "Who raised you, {foe}? Don't answer.", "I've buried three husbands, sweetie. I'm not scared of you."],
+    idle: ["You two should eat something.", "When I was a girl we pegged with chicken bones.", "I'm not saying deal faster. I'm just old.", "{pal}, sit up straight, people are watching."],
+    win: ["Nana wins! Cookies for everyone except {them}.", "Was there ever any doubt, dears?", "Now everyone kiss Nana."],
+    lose: ["That's fine. I'll just knit something.", "Good game, dear. I let you win.", "Well. I'll be in my room."],
+    skunked: ["Skunked. I'll be cutting you out of the will.", "Well. Nobody's coming to my birthday, I suppose."],
+    undo: ["Oh, put me back, dear. I liked that spot.", "Changed your mind? Just like your grandfather."],
+    oops: ["Going backwards, dear? At my age?", "Oops! Nana's turned around."],
+  }},
+  zed: { name: 'Zed', pitch: 255, lines: {
+    intro: ["I am Zed. I am the hole and the hole is me.", "Greetings. The board has been expecting us.", "Hello. I can see your aura. It's mostly beige."],
+    poke: ["Your touch... it ripples through the cosmos.", "I felt that in a past life.", "Poke. And so the universe pokes back.", "Whoa. Do it again. No wait. Don't."],
+    lift: ["I am floating. I have always been floating.", "Gravity is just a suggestion.", "I see the whole board. It's... it's a rectangle, man."],
+    move: ["The hole I left was never mine.", "Flow like sap, {pal}.", "Another hole. Another lifetime.", "Hole {score}. Numbers are just shapes that count."],
+    small: ["{pts}. Small is a perspective.", "In the grand scheme, {pts} is infinity. Ish.", "Tiny steps. Like an ant. The ant knows."],
+    big: ["{pts}. The stars aligned. I sensed it.", "Fifteen two, fifteen four... the cosmos counts with me.", "Whoa. I saw colors. All of them."],
+    envy: ["{pts}? The universe gives. The universe... gives to {foe}. Odd.", "I release my jealousy into the void. ...It came back.", "That was not very zen of you, {foe}."],
+    overtake: ["I pass you like a comet, {foe}.", "Ahead or behind, {them}, we are all on the same board. I'm just further on it."],
+    overtaken: ["Behind is just ahead from the other side.", "I embrace being passed, {foe}. Deeply. Mostly. Kind of."],
+    skipped: ["{pal}, you left me in the past. It's fine. I'm made of time.", "The back peg was meant to leap. The universe is confused."],
+    stink: ["The 120th hole smells of enlightenment. And feet.", "One more hole between me and nirvana."],
+    escape: ["The skunk was only ever in our minds.", "Free from skunk. Free from fear. Free from... ok, mostly free."],
+    fear: ["{them} reaches {theirScore}... I feel a disturbance.", "Is this fear? I should meditate. Quickly.", "Om... om... OM... OMG."],
+    leer: ["I see your future, {foe}. It's behind me.", "{gap} holes apart, yet we are one, {them}. I'm the winning one.", "{foe}, your energy is very... behind."],
+    retort: ["Your words are leaves on the wind.", "I forgive you. The board does not.", "Om. ...That was a burn, by the way.", "Your aura just turned brown, {foe}."],
+    idle: ["What if the board is playing US?", "Every peg is just a tree that dreams.", "Shuffle the deck. Shuffle the soul.", "{pal}, have you ever really LOOKED at a hole?"],
+    win: ["I have reached 121. And yet I am just beginning.", "The cosmos has spoken. It said 'Zed'."],
+    lose: ["Losing is just winning wearing a hat.", "I return to the box, at peace."],
+    skunked: ["Skunked... a lesson from the universe. A smelly one.", "The skunk is my teacher now."],
+    undo: ["Time is a flat board.", "Déjà vu. Déjà vu."],
+    oops: ["Backwards... like time itself.", "The river flows both ways today."],
+  }},
+  rocco: { name: 'Rocco', pitch: 195, lines: {
+    intro: ["Gooood evening, cribbage fans! Rocco here, live from the felt!", "What a crowd tonight! Both of them!", "It's a beautiful night for pegging, folks!"],
+    poke: ["Oh! A poke from the stands! Unsportsmanlike!", "FLAG on the play!", "And the peg takes a hit, but he's still standing!", "Somebody check on Rocco! He's ok! He's OK!"],
+    lift: ["And he's UP!", "Peg is airborne! Look at that hang time!", "Up, up, and... we'll see!"],
+    move: ["Rocco moves up the track, looking STRONG!", "And he leaps {pal} with ease, folks!", "Textbook pegging! They'll teach this one in schools!", "Rocco at {score}, and the crowd is ON ITS FEET!"],
+    small: ["{pts} points. Not flashy, but it all counts on the scoreboard.", "A conservative play. The crowd is... politely clapping.", "Small ball, folks. Small ball."],
+    big: ["{pts}! UNBELIEVABLE! Put it on the highlight reel!", "OH MY! {player} has done it AGAIN!", "That's the play of the GAME, folks!"],
+    envy: ["{pts} for {them}. A devastating blow to the home team.", "Ooh, and {foe} lands a haymaker. Can Rocco recover?", "We'll need to see the replay on that one, folks. Seems fishy."],
+    overtake: ["AND HE TAKES THE LEAD! {foe} is in SHAMBLES!", "Rocco passes {foe} on the outside! WHAT A MOVE!"],
+    overtaken: ["{foe} slips past! Rocco is reeling, folks!", "A lead change! And not in our favor!"],
+    skipped: ["Unbelievable, folks, {pal} has skipped the leapfrog! A rookie error!", "Back peg left stranded! The fans are FURIOUS!"],
+    stink: ["He's in the stink hole! One point away! The tension is UNBEARABLE!", "120! Can he close it out?!"],
+    escape: ["He clears the skunk line! The crowd goes WILD!", "No skunk tonight, folks! Not on Rocco's watch!"],
+    fear: ["{them} is at {theirScore}, and I gotta tell you, folks, it's looking grim.", "Rocco needs a miracle. Somebody call the commissioner.", "And here we see the peg in its natural state: panic."],
+    leer: ["Rocco leads by {gap}! {foe} looking rattled out there!", "{them} needs a timeout. Or a new hobby.", "Look at {foe}, folks. Just look at 'em. Tragic."],
+    retort: ["The trash talk is FLYING tonight, folks!", "Ooh! {foe} fires back! But Rocco is unbothered!", "Nobody tells Rocco how to peg!", "That's a technical foul, {foe}!"],
+    idle: ["We're in a brief stoppage, folks. Probably a card thing.", "While we wait, a word from our sponsor: wood.", "The crowd is getting restless. Both of them.", "{pal}, any comment for the fans? No? Ok."],
+    win: ["IT'S OVER! ROCCO WINS IT! WHAT A GAME!", "CHAMPION! Somebody get this peg a trophy!"],
+    lose: ["A heartbreaking loss here tonight, folks.", "Rocco gave it everything. It just wasn't enough."],
+    skunked: ["Ladies and gentlemen... a SKUNK. Rocco won't be talking to the press.", "A dark day for this franchise."],
+    undo: ["The play is under review... and it's OVERTURNED!", "Instant replay! Rocco returns to his previous hole!"],
+    oops: ["A backwards move?! Never seen THIS in my career!", "He's going the wrong way! HE'S GOING THE WRONG WAY!"],
+  }},
+  prof: { name: 'Prof. Thistlewood', pitch: 310, lines: {
+    intro: ["Professor Thistlewood. Cribbage dates to the 1630s. You're welcome.", "Ah, cribbage. The thinking peg's game.", "I've prepared a short lecture. It's ninety minutes."],
+    poke: ["Kindly refrain from perturbing the apparatus.", "Statistically, that poke was unnecessary.", "I have a doctorate, you know.", "I shall be citing you for that."],
+    lift: ["Elevation: approximately four centimetres. Noted.", "An unscheduled ascent!", "Fascinating. Terrifying, but fascinating."],
+    move: ["Correct leapfrog technique. Observe, {pal}.", "Hole {score}. As calculated.", "Fun fact: the board has 121 holes. Fun for me, anyway.", "Proceeding according to the literature."],
+    small: ["{pts} points. The average hand is about 4.7, so... adequate-ish.", "Below average. I'm not judging. I'm measuring.", "Modest. Statistically defensible."],
+    big: ["{pts}! Top percentile! I must update my spreadsheet.", "Remarkable! A {pts}! For SCIENCE!", "Peer review will confirm my brilliance."],
+    envy: ["{pts}? Statistically improbable. I'm filing a paper.", "The odds of that were... annoyingly decent.", "{foe} will not be invited to my symposium."],
+    overtake: ["Passing {foe}, as my models predicted.", "Overtaking you, {them}. Basic arithmetic."],
+    overtaken: ["A temporary anomaly. Regression to the mean will save me.", "Interesting. Wrong, but interesting."],
+    skipped: ["{pal}, the proper technique is that the REAR peg advances. Chapter one.", "An improper advance! I shall note this in the minutes."],
+    stink: ["Hole 120, colloquially 'the stink hole'. Etymology unclear. Smell very clear.", "One unit remaining."],
+    escape: ["Past 90. Skunk probability now zero.", "The skunk line is behind me. As per my thesis."],
+    fear: ["{them} at {theirScore}. My models predict... unpleasantness.", "Recalculating... recalculating... oh dear.", "I've run the numbers and the numbers ran away."],
+    leer: ["You're {gap} holes behind, {foe}. That's statistically significant.", "Shall I explain the rules again, {them}? Slowly?", "I've drawn a chart of your performance, {foe}. It's a sad chart."],
+    retort: ["Ad hominem. Weak argument.", "Your rhetoric lacks citations.", "Incorrect, and I have a chart.", "I'll take that under peer review. Rejected."],
+    idle: ["Did you know 19 is an impossible hand? Of course you didn't.", "The highest hand is 29. Odds roughly 1 in 216,580.", "His nobs: the jack of the cut suit, one point. You're welcome.", "{pal}, stop fidgeting, I'm observing."],
+    win: ["Q.E.D.", "Victory, as hypothesised.", "I'll be publishing this result."],
+    lose: ["The sample size is too small.", "I demand a best-of-seven.", "Clearly a measurement error."],
+    skunked: ["Skunked. This data point is an outlier and will be discarded.", "I shall be retiring to my study. Indefinitely."],
+    undo: ["Erratum corrected.", "Reverting to the previous state."],
+    oops: ["Negative displacement?! Unacceptable.", "We appear to be moving backwards in the dataset."],
+  }},
+};
+// How each line type makes the peg's face look.
+const EV_MOOD = { poke:'angry', lift:'scared', big:'happy', envy:'angry', overtake:'smug', overtaken:'angry', skipped:'angry',
+  stink:'scared', escape:'happy', fear:'scared', leer:'leer', retort:'angry', win:'happy', lose:'sad', skunked:'sad',
+  oops:'scared', small:'meh', intro:'smug', move:'smug', idle:'none', undo:'meh' };
+const CHAT = ['Lots', 'Some', 'Rarely', 'Off'];
+const TALK_RATE = [1, 0.5, 0.18, 0];                      // chance multiplier for non-essential lines
+const IDLE_GAP = [[10000, 12000], [24000, 20000], [75000, 60000]]; // ms between unprompted banter: base + random spread
+
+function assignCast(force) {
+  const keys = Object.keys(CAST);
+  if (!force && Array.isArray(S.cast) && S.cast.length === 8 && S.cast.every(k => CAST[k]) && new Set(S.cast).size === 8) return;
+  const old = Array.isArray(S.cast) ? S.cast : [];
+  let sh;
+  do { sh = keys.slice(); for (let i = sh.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [sh[i], sh[j]] = [sh[j], sh[i]]; } }
+  while (force && sh.slice(0, S.n * 2).every((k, i) => k === old[i]));
+  S.cast = sh.slice(0, 8);
+  console.log('[cribbage] cast:', S.cast.map((k, i) => `${S.names[i >> 1]}#${i % 2}=${CAST[k].name}`).join(', '));
+}
+const who = p => CAST[S.cast[p.id]];
+const partner = p => pegs.find(o => o.lane === p.lane && o !== p);
+const frontPeg = l => pegs.filter(p => p.lane === l).sort((a, b) => holeN(b.hole) - holeN(a.hole))[0];
+const randPeg = l => { const ps = pegs.filter(p => p.lane === l); return ps[Math.floor(Math.random() * ps.length)]; };
+function rivalOf(l) {                    // the opponent who matters most: the leader among the others
+  let best = -1, bl = l === 0 ? 1 : 0;
+  for (let o = 0; o < S.n; o++) if (o !== l && laneScore(o) > best) { best = laneScore(o); bl = o; }
+  return bl;
+}
+function fill(t, p, x) {
+  const tl = x.lane !== undefined ? x.lane : rivalOf(p.lane), fp = x.foe || frontPeg(tl);
+  const map = { me: who(p).name, pal: who(partner(p)).name, player: S.names[p.lane], them: S.names[tl], foe: who(fp).name,
+    pts: x.pts !== undefined ? x.pts : '', score: laneScore(p.lane), theirScore: laneScore(tl), gap: Math.abs(laneScore(p.lane) - laneScore(tl)) };
+  return t.replace(/\{(\w+)\}/g, (m, k) => (k in map ? esc(map[k]) : m));
+}
+
+/* ================== Chatter engine ================== */
+const talkEl = document.getElementById('talk');
+const bubbles = new Map();              // peg -> { el, start, len, text, shown, until, up }
+let lastAct = performance.now(), nextIdle = 9000;
+function bump() { lastAct = performance.now(); }
+// prio: 1 = flavor (dropped when busy or on "Some"), 2 = reaction, 3 = always (pokes, wins).
+function say(p, ev, x = {}, delay = 0, prio = 1) {
+  if (!p || S.talk === 3 || NET.role === 'guest') return;   // the guest phone mirrors the host's lines
+  const pool = who(p).lines[ev]; if (!pool) return;
+  const chance = (x.chance !== undefined ? x.chance : 1) * (prio < 3 ? TALK_RATE[S.talk] : 1);
+  if (Math.random() >= chance) return;
+  setTimeout(() => {
+    if (S.talk === 3 || !pegs.includes(p)) return;
+    if (ev === 'poke' && voiceOn()) speechSynthesis.cancel();   // a poke interrupts whoever is talking
+    if (prio < 2 && bubbles.size >= 1 && !bubbles.has(p)) return;
+    if (prio < 3 && bubbles.size >= 2 && !bubbles.has(p)) return;
+    let i, tries = 0;
+    do i = Math.floor(Math.random() * pool.length); while (pool.length > 1 && i === p.lastLine[ev] && ++tries < 8);
+    p.lastLine[ev] = i;
+    speak(p, fill(pool[i], p, x), EV_MOOD[ev] || 'none', x.foe || (x.lane !== undefined ? frontPeg(x.lane) : null));
+  }, delay);
+}
+function speak(p, text, mood, target) {
+  const old = bubbles.get(p); if (old) killBubble(p, old, true);
+  const now = performance.now(), plain = text.replace(/&[a-z#0-9]+;/g, 'x'), len = plain.length;
+  const el = document.createElement('div'), c = col(p.lane);
+  el.className = 'say' + (p.lane % 2 ? ' right' : '') + (mood === 'angry' ? ' angry' : '');   // chat-style: alternate sides by player
+  el.style.cssText = `--c:${c.base};--cl:${c.light};--cd:${c.dark}`;
+  el.innerHTML = `<i class="av"></i><span class="tx"><b>${esc(who(p).name)} · ${esc(S.names[p.lane])}</b><span class="t"></span><span class="g">${text}</span></span>`;
+  talkEl.appendChild(el);
+  const b = { el, start: now, cps: 26, boundary: 0, voice: false, text, raw: plain, shown: 0, len, until: now + 1900 + len * 55, up: true };
+  bubbles.set(p, b);
+  requestAnimationFrame(() => el.classList.add('show'));
+  p.mood = mood; p.moodUntil = b.until + 500; p.talkUntil = now + len * 26;
+  if (target && target !== p) { p.lookAt = target; p.lookUntil = b.until; }
+  if (voiceOn()) talkAloud(p, b, el.querySelector('.g').textContent);
+  p.sv = Math.max(p.sv, mood === 'angry' || mood === 'scared' ? 0.25 : 0.14);
+  console.log(`[cribbage] ${who(p).name} (${S.names[p.lane]}): ${plain}`);
+  if (NET.role === 'host') netSpeech(p, text, mood, target);
+}
+/* ---------- Spoken voices (the browser's built-in speech synthesis; works offline with system voices) ---------- */
+// Each personality lists the system voices that suit it, best first, plus how to bend its pitch (0-2) and rate.
+// Names cover macOS/iOS (Grandpa, Rocko, Daniel...), Windows (Microsoft ...) and Chrome's Google voices.
+const VOICES = {
+  // Casting notes. Natural voices on this Mac: Daniel (posh English man), Jamie (younger, brisk English man),
+  // Lee (laid-back Australian man), Serena (cool, polished English woman), Fiona (warm Scottish woman),
+  // Moira (soft, lilting Irish woman), Karen and Matilda (bright Australian women), Ava (smooth American woman),
+  // Zoe (young, light American woman). Each list asks for an American voice first where the character is
+  // American (used if you download Evan, Nathan, Tom...), then the best fit from the set above.
+  reggie: { want: ['Daniel', 'Arthur', 'Oliver', 'Jamie', 'Google UK English Male', 'Microsoft George'], sex: 'm', lang: 'en-GB', pitch: 0.8, rate: 0.85 },   // stuffy aristocrat: the poshest Englishman, slowed down
+  vinnie: { want: ['Evan', 'Nathan', 'Tom', 'Lee', 'Jamie', 'Ava', 'Microsoft Guy'], sex: 'm', lang: 'en-US', pitch: 0.75, rate: 1.15 },              // fast-talking wiseguy: a streetwise drawl, low and quick
+  pip:    { want: ['Zoe', 'Matilda', 'Ava', 'Karen', 'Samantha', 'Google US English'], sex: 'f', lang: 'en-US', pitch: 1.6, rate: 1.3 },                // nervous wreck: the youngest, lightest voice, high and rushed
+  vex:    { want: ['Serena', 'Fiona', 'Moira', 'Martha', 'Kate', 'Microsoft Sonia'], sex: 'f', lang: 'en-GB', pitch: 0.7, rate: 0.82 },              // theatrical villainess: cool and polished English, low and savoured
+  chad:   { want: ['Tom', 'Aaron', 'Evan', 'Lee', 'Jamie', 'Karen', 'Microsoft Andrew'], sex: 'm', lang: 'en-US', pitch: 1.05, rate: 1.22 },          // gym bro: an Aussie "mate" works nicely, pumped and quick
+  dusty:  { want: ['Lee', 'Gordon', 'Daniel', 'Jamie', 'Grandpa'], sex: 'm', lang: 'en-AU', pitch: 0.65, rate: 0.78 },                                 // old prospector: weathered outback drawl, low and slow
+  mabel:  { want: ['Fiona', 'Karen', 'Moira', 'Allison', 'Susan', 'Grandma'], sex: 'f', lang: 'en-GB', pitch: 1.15, rate: 0.85 },                     // sweet-and-sour granny: warm Scottish lilt, unhurried
+  zed:    { want: ['Moira', 'Rishi', 'Isha', 'Fiona', 'Matilda', 'Tessa'], sex: 'f', lang: 'en-IE', pitch: 0.9, rate: 0.72 },                        // cosmic mystic: soft and dreamy, drifting slowly
+  rocco:  { want: ['Nathan', 'Evan', 'Jamie', 'Lee', 'Daniel', 'Ava', 'Microsoft Guy'], sex: 'm', lang: 'en-US', pitch: 1.12, rate: 1.3 },           // sports announcer: brisk and bright, top speed
+  prof:   { want: ['Oliver', 'Jamie', 'Arthur', 'Daniel', 'Serena', 'Microsoft Ryan'], sex: 'm', lang: 'en-GB', pitch: 1.2, rate: 1.08 },             // pedantic professor: crisp, precise English, a touch nasal
+};
+const NOVELTY = /\b(Albert|Bad News|Bahh|Bells|Boing|Bubbles|Cellos|Good News|Jester|Organ|Superstar|Trinoids|Whisper|Wobble|Zarvox|Junior|Ralph|Fred|Kathy|Eddy|Flo|Grandma|Grandpa|Reed|Rocko|Sandy|Shelley)\b/i;
+const MALE = /\b(Jamie|Malcolm|Gordon|Nathan|Alex|Aaron|Albert|Arthur|Daniel|Eddy|Evan|Fred|Gordon|Grandpa|Junior|Lee|Oliver|Ralph|Reed|Rishi|Rocko|Tom|David|Mark|George|Ryan|Guy|Andrew|Brian|Christopher|Eric|Roger|Steffan|Thomas|William|Male)\b/i;
+const FEMALE = /\b(Catherine|Matilda|Stephanie|Nicky|Noelle|Joelle|Veena|Sangeeta|Zoe|Isha|Samantha|Karen|Moira|Tessa|Fiona|Victoria|Kathy|Serena|Martha|Flo|Grandma|Sandy|Shelley|Kate|Allison|Ava|Susan|Zira|Hazel|Sonia|Libby|Aria|Jenny|Ana|Emma|Michelle|Female)\b/i;
+let sysVoices = [], castVoices = null;
+const quality = v => /premium/i.test(v.name) ? 2 : /enhanced|natural|neural/i.test(v.name) ? 1 : 0;
+const voiceOn = () => S.voices && !S.muted && S.talk !== 3 && 'speechSynthesis' in window;
+function loadVoices() {
+  if (!('speechSynthesis' in window)) return;
+  sysVoices = speechSynthesis.getVoices().filter(v => /^en([-_]|$)/i.test(v.lang));
+  castVoices = null;
+  if (sysVoices.length) console.log(`[cribbage] ${sysVoices.length} English voices available`);
+}
+if ('speechSynthesis' in window) { loadVoices(); speechSynthesis.addEventListener('voiceschanged', loadVoices); }
+// Give every peg on the board a different system voice where the machine has enough of them.
+function voiceFor(p) {
+  if (!castVoices) {
+    castVoices = {};
+    const used = new Set(), named = n => v => v.name === n || (v.name.startsWith(n) && !/[a-z]/i.test(v.name[n.length]));
+    const pickFrom = (list, cfg) => list.filter(v => !used.has(v)).sort((a, b) => quality(b) - quality(a) ||
+      (b.lang.replace('_', '-') === cfg.lang) - (a.lang.replace('_', '-') === cfg.lang) || b.localService - a.localService)[0];
+    // Once any Premium/Enhanced voice is installed, the old compact and novelty voices are excluded entirely.
+    // If there are more pegs than good voices, a good voice is shared (the pitch/rate tweak keeps them apart).
+    const good = sysVoices.filter(v => quality(v) > 0), pool = good.length ? good : sysVoices.filter(v => !NOVELTY.test(v.name));
+    const sexOf = cfg => cfg.sex === 'm' ? MALE : FEMALE;
+    // Wish lists first, settled by how much each character wants a voice: rank-0 picks beat rank-3 picks,
+    // so the old prospector keeps the outback drawl even if the wiseguy listed it as a fallback.
+    const ids = [...Array(S.n * 2).keys()], cfgOf = id => VOICES[S.cast[id]] || VOICES.reggie, wish = [];
+    ids.forEach(id => cfgOf(id).want.forEach((n, rank) => {
+      const v = pickFrom(pool.filter(named(n)), cfgOf(id)); if (v) wish.push({ id, rank, v });
+    }));
+    wish.sort((a, b) => a.rank - b.rank || a.id - b.id);
+    const got = {};
+    for (const w of wish) if (!(w.id in got) && !used.has(w.v)) { got[w.id] = w.v; used.add(w.v); }
+    for (const id of ids) {
+      const k = S.cast[id], cfg = cfgOf(id);
+      let v = got[id] || null;
+      if (v) { castVoices[k] = v; continue; }
+      if (!v) v = pickFrom(pool.filter(x => sexOf(cfg).test(x.name)), cfg);                    // any unused voice of the right sex
+      if (!v) v = pickFrom(pool, cfg);                                                         // any unused voice
+      if (!v) { used.clear(); v = pickFrom(pool.filter(x => sexOf(cfg).test(x.name)), cfg) || pickFrom(pool, cfg); } // share
+      if (!v) v = sysVoices[0] || null;
+      if (v) used.add(v);
+      castVoices[k] = v;
+    }
+    console.log('[cribbage] voices:', Object.entries(castVoices).map(([k, v]) => `${CAST[k].name}=${v ? v.name : 'default'}`).join(', '));
+  }
+  return castVoices[S.cast[p.id]] || null;
+}
+function talkAloud(p, b, spoken) {
+  const cfg = VOICES[S.cast[p.id]] || VOICES.reggie, v = voiceFor(p);
+  const u = new SpeechSynthesisUtterance(spoken.replace(/\.\.\./g, '…'));
+  if (v) { u.voice = v; u.lang = v.lang; } else u.lang = cfg.lang;
+  // Natural voices warble when pushed far from their own pitch and pace, so bend them only gently.
+  const k = v && quality(v) > 0 ? 0.35 : 1, pitch = 1 + (cfg.pitch - 1) * k, rate = 1 + (cfg.rate - 1) * (k === 1 ? 1 : 0.6);
+  u.pitch = pitch; u.rate = rate; u.volume = 1;
+  b.voice = true; b.start = Infinity; b.until = Infinity; b.cps = 64 / rate;
+  p.talkUntil = 0;                                  // mouth stays shut while waiting for its turn to speak
+  const begin = () => { if (b.start === Infinity) { b.start = performance.now(); p.talkUntil = Infinity; p.moodUntil = Infinity; } };
+  const finish = failed => {
+    if (!b.voice) return;
+    b.voice = false;
+    const n = performance.now();
+    if (failed && b.start === Infinity) { b.start = n; b.cps = 26; b.until = n + 1900 + b.len * 55; p.talkUntil = n + b.len * 26; }
+    else { b.boundary = b.len; b.until = n + 1300; p.talkUntil = n; }
+    p.moodUntil = b.until + 500; if (p.lookAt) p.lookUntil = b.until;
+  };
+  u.onstart = begin;
+  u.onboundary = e => { begin(); b.boundary = Math.max(b.boundary, e.charIndex); };
+  u.onend = () => finish(false);
+  u.onerror = e => finish(e.error !== 'interrupted' && e.error !== 'canceled');
+  setTimeout(() => { if (b.voice && b.start === Infinity && !speechSynthesis.speaking) finish(true); }, 2500); // blocked or no voices: fall back to text
+  setTimeout(() => finish(false), 25000);
+  speechSynthesis.speak(u);
+}
+function hush() { if ('speechSynthesis' in window) speechSynthesis.cancel(); }
+function updateVoice() {
+  const btn = document.getElementById('voiceBtn');
+  if (!('speechSynthesis' in window)) { btn.style.display = 'none'; return; }
+  btn.textContent = S.voices ? '🗣️ Voices' : '🤐 Voices';
+  btn.title = S.voices ? 'Pegs speak their lines aloud (tap to silence)' : 'Pegs only show text (tap to hear them)';
+}
+document.getElementById('voiceBtn').onclick = () => {
+  audio(); S.voices = !S.voices; save(); updateVoice(); tock(0.6);
+  if (!S.voices) hush();
+  else if (S.talk !== 3) say(pegs[Math.floor(Math.random() * pegs.length)], 'intro', {}, 100, 3);
+};
+
+function killBubble(p, b, instant) {
+  bubbles.delete(p);
+  if (instant) { b.el.remove(); return; }
+  b.el.classList.remove('show'); b.el.classList.add('out');
+  setTimeout(() => b.el.remove(), 220);
+}
+// Lines live in the strip under the board (so they never cover the hole numbers); the speaker's peg glows.
+function placeBubbles(now) {
+  for (const p of pegs) {
+    const on = bubbles.has(p);
+    if (on) { p.ring.setAttribute('stroke', col(p.lane).light); p.ring.setAttribute('opacity', (0.55 + 0.4 * Math.sin(now / 160)).toFixed(2)); }
+    else if (p.ringOn) p.ring.setAttribute('opacity', 0);
+    p.ringOn = on;
+  }
+  for (const [p, b] of bubbles) {
+    if (!pegs.includes(p) || now > b.until) { killBubble(p, b); continue; }
+    // Type the line out: in step with the spoken voice when there is one, otherwise with a babble.
+    const chars = Math.min(b.len, Math.max(0, b.boundary, Math.floor((now - b.start) / b.cps)));
+    if (chars !== b.shown) {
+      const ch = b.raw[chars - 1];
+      if (!b.voice && !voiceOn() && chars % 2 === 0 && ch && /\w/.test(ch)) blip(who(p).pitch);
+      b.shown = chars;
+      const cut = cutHtml(b.text, chars);
+      b.el.querySelector('.t').innerHTML = cut[0]; b.el.querySelector('.g').innerHTML = cut[1];
+    }
+  }
+}
+function cutHtml(html, n) {               // split escaped html after n visible characters
+  let i = 0, seen = 0;
+  while (i < html.length && seen < n) { if (html[i] === '&') { const e = html.indexOf(';', i); i = e > 0 ? e + 1 : i + 1; } else i++; seen++; }
+  return [html.slice(0, i), html.slice(i)];
+}
+
+// What the pegs say after a move.
+function chatter(peg, before, after, from) {
+  bump();
+  const pts = after - before, pal = partner(peg), rl = rivalOf(peg.lane);
+  if (pts < 0) return say(peg, 'oops', {}, 300, 2);
+  if (pts === 0 || pts === 19) return;
+  if (pts >= 12) {
+    const late = pts >= 24 ? 2700 : 700;
+    say(peg, 'big', { pts }, late, 3);
+    say(randPeg(rl), 'envy', { pts, lane: peg.lane, foe: peg }, late + 3300, 2);
+    return;
+  }
+  let passed = -1;                                  // did we just pass somebody?
+  for (let l = 0; l < S.n; l++) {
+    if (l === peg.lane) continue;
+    const s = laneScore(l);
+    if (s > 0 && before <= s && after > s && (passed < 0 || s > laneScore(passed))) passed = l;
+  }
+  if (passed >= 0) {
+    const victim = frontPeg(passed);
+    say(peg, 'overtake', { lane: passed, foe: victim }, 350, 2);
+    say(victim, 'overtaken', { lane: peg.lane, foe: peg }, 3500, 2);
+    return;
+  }
+  if (after === 120) return say(peg, 'stink', {}, 350, 3);
+  if ((before < 91 && after >= 91) || (before < 61 && after >= 61)) return say(peg, 'escape', {}, 350, 2);
+  if (after >= 100 && !S.cur.feared[peg.lane]) {    // someone's closing in: the trailers get scared, once per game
+    S.cur.feared[peg.lane] = 1;
+    let d = 600;
+    for (let l = 0; l < S.n; l++) if (l !== peg.lane && laneScore(l) < after) { say(randPeg(l), 'fear', { lane: peg.lane, foe: peg }, d, 2); d += 3200; }
+    return;
+  }
+  const fromN = HOLES[from] ? HOLES[from].n : 0;
+  if (fromN > 0 && fromN > holeN(pal.hole)) return say(pal, 'skipped', {}, 400, 2);   // moved the front peg: the back one is offended
+  if (pts <= 2) return say(peg, 'small', { pts, chance: 0.8 }, 350, 1);
+  if (Math.random() < 0.6) say(peg, 'move', { pts }, 350, 1);
+}
+
+// Unprompted banter during lulls: gloating, retorts, nerves, small talk.
+function idleBeat() {
+  if (S.winner !== null) {
+    const lp = randPeg(rivalOf(S.winner));
+    if (Math.random() < 0.5) say(randPeg(S.winner), 'leer', { lane: lp.lane, foe: lp }, 0, 2);
+    else say(lp, 'lose', { lane: S.winner }, 0, 2);
+    return;
+  }
+  let lead = 0, trail = 0;
+  for (let l = 1; l < S.n; l++) { if (laneScore(l) > laneScore(lead)) lead = l; if (laneScore(l) < laneScore(trail)) trail = l; }
+  const gap = laneScore(lead) - laneScore(trail), r = Math.random();
+  if (laneScore(lead) >= 100 && gap >= 6 && r < 0.4) {
+    const a = randPeg(trail), b = frontPeg(lead);
+    say(a, 'fear', { lane: lead, foe: b }, 0, 2);
+    say(b, 'leer', { lane: trail, foe: a }, 3600, 2);
+  } else if (gap >= 8 && r < 0.75) {
+    const a = randPeg(lead), b = randPeg(trail);
+    say(a, 'leer', { lane: trail, foe: b }, 0, 2);
+    say(b, 'retort', { lane: lead, foe: a }, 3900, 2);
+    if (Math.random() < 0.35) say(a, 'retort', { lane: trail, foe: b }, 7900, 2);   // and the last word
+  } else {
+    const l = Math.floor(Math.random() * S.n), a = randPeg(l);
+    say(a, 'idle', {}, 0, 2);
+    if (Math.random() < 0.4) say(Math.random() < 0.5 ? partner(a) : randPeg(rivalOf(l)), 'idle', {}, 4200, 2);
+  }
+}
+setInterval(() => {
+  if (S.talk === 3 || drag || bubbles.size || document.hidden) return;
+  const now = performance.now(); if (now - lastAct < nextIdle) return;
+  lastAct = now;
+  const [base, spread] = IDLE_GAP[S.talk] || IDLE_GAP[0];
+  nextIdle = base + Math.random() * spread;
+  idleBeat();
+}, 1000);
+function introBeat() {
+  const l1 = Math.floor(Math.random() * S.n), l2 = (l1 + 1 + Math.floor(Math.random() * (S.n - 1))) % S.n;
+  say(randPeg(l1), 'intro', {}, 900, 2);
+  say(randPeg(l2), 'intro', {}, 4300, 2);
+  bump();
+}
+function updateChat() { document.getElementById('chatBtn').textContent = `💬 ${CHAT[S.talk] || CHAT[0]}`; }
+document.getElementById('chatBtn').onclick = () => {
+  audio(); S.talk = ((S.talk || 0) + 1) % 4; save(); updateChat(); tock(0.6);
+  if (S.talk === 3) { hush(); for (const [p, b] of bubbles) killBubble(p, b); }
+  else { const p = pegs[Math.floor(Math.random() * pegs.length)]; say(p, 'idle', {}, 100, 3); }
+};
+document.getElementById('castBtn').onclick = () => {
+  audio(); hush(); assignCast(true); castVoices = null; save(); renderPlaques();
+  for (const [p, b] of bubbles) killBubble(p, b, true);
+  pegs.forEach((p, i) => { p.lastLine = {}; setTimeout(() => { p.sv = 0.4; tock(0.4); }, i * 70); });
+  toast('New cast! Tap a name on a plaque to meet them.');
+  introBeat();
+};
+function blip(f) {                      // tiny babble voice, one per couple of letters
+  if (S.muted || !AC) return;
+  const t = AC.currentTime, ff = f * (0.85 + Math.random() * 0.35);
+  tone(t, ff, ff * (Math.random() < 0.5 ? 1.15 : 0.9), 0.045, 0.03, 'triangle');
+}
+
+/* ================== Boot ================== */
+function init() {
+  assignCast(); castVoices = null; buildBoard(); createPegs(); renderPlaques(); renderMatch(); applySkin(); updateChat(); updateVoice();
+}
+init();
+keepAwake();
+requestAnimationFrame(frame);
+
+/* ================== Online play: two phones, private hands ================== */
+// Transport: MQTT over secure WebSockets through two public brokers at once. That gets through airport and
+// hotel Wi-Fi where peer-to-peer links often can't. The host phone runs the game; the guest phone is only
+// ever sent its own cards. Every message is deduplicated, so the two brokers never double anything.
+const BROKERS = ['wss://broker.hivemq.com:8884/mqtt', 'wss://broker.emqx.io:8084/mqtt'];
+const TOPIC = code => `ovbcrib/v1/${code}`;
+const HOST_KEY = 'crib-online-host', GUEST_KEY = 'crib-online-guest', NAME_KEY = 'crib-online-name';
+const CODE_ABC = 'ABCDEFGHJKMNPQRSTUVWXYZ';
+const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+const $ = id => document.getElementById(id);
+Object.assign(NET, { code: null, clients: [], me: 0, lastV: 0, seen: new Set(), peer: {}, pending: [], onConnect: null });
+
+/* ---------- Cards ---------- */
+const RANK = ['', 'A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+const RNAME = ['', 'Ace', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Jack', 'Queen', 'King'];
+const SUIT = ['♠', '♥', '♦', '♣'];
+const rank = c => c % 13 + 1, suit = c => Math.floor(c / 13), val = c => Math.min(10, rank(c));
+const cardName = c => RANK[rank(c)] + SUIT[suit(c)];
+const plural = r => RNAME[r] + (r === 6 ? 'es' : 's');
+const byRank = (a, b) => rank(a) - rank(b) || suit(a) - suit(b);
+function cardHtml(c, cls = '') {
+  const s = SUIT[suit(c)] + '︎';
+  return `<div class="card ${suit(c) === 1 || suit(c) === 2 ? 'red' : ''} ${cls}" data-c="${c}"><span class="cr">${RANK[rank(c)]}<small>${s}</small></span><span class="cs">${s}</span></div>`;
+}
+const backsHtml = (n, cls = '') => Array.from({ length: n }, () => `<div class="card back ${cls}"></div>`).join('');
+function shuffled() {
+  const d = [...Array(52).keys()], r = new Uint32Array(52);
+  crypto.getRandomValues(r);
+  for (let i = 51; i > 0; i--) { const j = r[i] % (i + 1); [d[i], d[j]] = [d[j], d[i]]; }
+  return d;
+}
+
+/* ---------- Scoring ---------- */
+function scoreHand(hand, st, crib) {
+  const all = hand.concat(st), parts = [];
+  let f = 0;
+  for (let m = 1; m < 32; m++) { let s = 0; for (let i = 0; i < 5; i++) if (m >> i & 1) s += val(all[i]); if (s === 15) f++; }
+  if (f) parts.push([f > 1 ? `Fifteen ×${f}` : 'Fifteen', f * 2]);
+  const cnt = Array(15).fill(0); all.forEach(c => cnt[rank(c)]++);
+  for (let r = 1; r <= 13; r++) {
+    if (cnt[r] === 2) parts.push([`Pair of ${plural(r)}`, 2]);
+    if (cnt[r] === 3) parts.push([`Three ${plural(r)}`, 6]);
+    if (cnt[r] === 4) parts.push([`Four ${plural(r)}`, 12]);
+  }
+  for (let r = 1; r <= 13;) {
+    if (!cnt[r]) { r++; continue; }
+    let e = r, mult = 1;
+    while (e <= 13 && cnt[e]) { mult *= cnt[e]; e++; }
+    if (e - r >= 3) parts.push([`Run of ${e - r}${mult > 1 ? ' ×' + mult : ''}`, (e - r) * mult]);
+    r = e;
+  }
+  const s0 = suit(hand[0]);
+  if (hand.every(c => suit(c) === s0)) {
+    if (suit(st) === s0) parts.push(['Flush of five', 5]);
+    else if (!crib) parts.push(['Flush', 4]);
+  }
+  if (hand.some(c => rank(c) === 11 && suit(c) === suit(st))) parts.push(['Nobs', 1]);
+  return { parts, total: parts.reduce((a, p) => a + p[1], 0) };
+}
+function pegParts(cards, count) {
+  const p = [], n = cards.length, last = rank(cards[n - 1]);
+  if (count === 15) p.push(['Fifteen', 2]);
+  if (count === 31) p.push(['Thirty-one', 2]);
+  let k = 1;
+  while (k < n && rank(cards[n - 1 - k]) === last) k++;
+  if (k >= 2) p.push([['', '', 'Pair', 'Three of a kind', 'Four of a kind'][k], [0, 0, 2, 6, 12][k]]);
+  for (let L = n; L >= 3; L--) {
+    const rs = cards.slice(-L).map(rank);
+    if (new Set(rs).size === L && Math.max(...rs) - Math.min(...rs) === L - 1) { p.push([`Run of ${L}`, L]); break; }
+  }
+  return p;
+}
+const partsText = parts => parts.map(([t, n]) => `${t} for ${n}`).join(', ');
+
+/* ---------- Host: the authoritative game ---------- */
+let GM = null;
+function newMatch(names) {
+  return { v: 0, gameId: uid(), names, phase: 'lobby', dealer: Math.random() < 0.5 ? 0 : 1, round: 0,
+    scores: [0, 0], pegs: [[0, 0], [0, 0]], ms: 0, moves: [], log: [], ls: 0, winner: null, nextDealer: null,
+    hands: [[], []], kept: [[], []], crib: [], discarded: [false, false], starter: null, deck: [],
+    pile: [], prevPile: [], count: 0, turn: null, show: null, acks: [],
+    colors: S.colors.slice(0, 2), cast: S.cast.slice() };
+}
+const gname = l => GM.names[l] || (l ? 'Guest' : 'Host');
+function addLog(t) { GM.log.push({ s: ++GM.ls, t }); if (GM.log.length > 12) GM.log.shift(); console.log('[online]', t); }
+function addPts(l, n, why) {
+  if (GM.winner !== null || n <= 0) return;
+  const f = GM.pegs[l][1], nf = Math.min(121, f + n);
+  GM.pegs[l] = [f, nf]; GM.scores[l] = nf;
+  GM.moves.push({ s: ++GM.ms, l, to: [f, nf] }); if (GM.moves.length > 40) GM.moves.shift();
+  addLog(`${gname(l)}: ${why}`);
+  if (nf >= 121) { GM.winner = l; GM.phase = 'over'; GM.nextDealer = 1 - l; addLog(`${gname(l)} wins the game!`); }
+}
+function deal() {
+  const d = shuffled();
+  GM.round++;
+  GM.hands = [d.splice(0, 6), d.splice(0, 6)]; GM.deck = d;
+  GM.kept = [[], []]; GM.crib = []; GM.discarded = [false, false]; GM.starter = null;
+  GM.pile = []; GM.prevPile = []; GM.count = 0; GM.turn = null; GM.show = null;
+  GM.phase = 'discard';
+  addLog(`Round ${GM.round}: ${gname(GM.dealer)} deals`);
+}
+const canPlay = l => GM.hands[l].some(c => GM.count + val(c) <= 31);
+function startShow() {
+  const nd = 1 - GM.dealer;
+  GM.phase = 'show';
+  GM.show = { step: 0, items: [
+    { l: nd, kind: 'hand', cards: GM.kept[nd] },
+    { l: GM.dealer, kind: 'hand', cards: GM.kept[GM.dealer] },
+    { l: GM.dealer, kind: 'crib', cards: GM.crib },
+  ].map(it => Object.assign(it, scoreHand(it.cards, GM.starter, it.kind === 'crib'))) };
+}
+function hostAct(l, a) {
+  if (a.id) { if (GM.acks.includes(a.id)) return commit(); GM.acks.push(a.id); if (GM.acks.length > 40) GM.acks.shift(); }
+  const o = 1 - l;
+  switch (a.t) {
+    case 'hello':
+      if (l === 1 && a.name) GM.names[1] = String(a.name).slice(0, 18);
+      if (GM.phase === 'lobby') { addLog(`${gname(1)} joined`); deal(); }
+      if (l === 1) { toast(`${gname(1)} is here!`); showGame(); }
+      break;
+    case 'discard': {
+      if (GM.phase !== 'discard' || GM.discarded[l] || !Array.isArray(a.cards) || a.cards.length !== 2) break;
+      const h = GM.hands[l];
+      if (a.cards[0] === a.cards[1] || !a.cards.every(c => h.includes(c))) break;
+      GM.hands[l] = h.filter(c => !a.cards.includes(c));
+      GM.crib.push(...a.cards); GM.kept[l] = GM.hands[l].slice(); GM.discarded[l] = true;
+      if (GM.discarded[o]) GM.phase = 'cut';
+      break;
+    }
+    case 'cut': {
+      if (GM.phase !== 'cut' || l === GM.dealer) break;
+      const i = 4 + Math.floor(Math.random() * (GM.deck.length - 8));
+      GM.starter = GM.deck.splice(i, 1)[0];
+      addLog(`${gname(l)} cut the ${cardName(GM.starter)}`);
+      if (rank(GM.starter) === 11) addPts(GM.dealer, 2, 'His heels for 2');
+      if (GM.phase === 'over') break;
+      GM.phase = 'peg'; GM.turn = 1 - GM.dealer; GM.pile = []; GM.prevPile = []; GM.count = 0;
+      GM.hands = [GM.kept[0].slice(), GM.kept[1].slice()];
+      break;
+    }
+    case 'play': {
+      const c = a.c, h = GM.hands[l];
+      if (GM.phase !== 'peg' || GM.turn !== l || !h.includes(c) || GM.count + val(c) > 31) break;
+      h.splice(h.indexOf(c), 1);
+      GM.pile.push({ c, by: l }); GM.count += val(c);
+      const parts = pegParts(GM.pile.map(x => x.c), GM.count), left = GM.hands[0].length + GM.hands[1].length;
+      let reset = GM.count === 31;
+      if (!reset) {
+        if (canPlay(o)) GM.turn = o;
+        else if (canPlay(l)) { GM.turn = l; if (GM.hands[o].length) addLog(`${gname(o)} says “Go”`); }
+        else { parts.push([left ? 'Go' : 'Last card', 1]); reset = true; }
+      }
+      const pts = parts.reduce((s, p) => s + p[1], 0);
+      if (pts) addPts(l, pts, `${cardName(c)} — ${partsText(parts)}`);
+      if (GM.phase === 'over') break;
+      if (reset) { GM.prevPile = GM.pile; GM.pile = []; GM.count = 0; GM.turn = GM.hands[o].length ? o : l; }
+      if (!left) startShow();
+      break;
+    }
+    case 'next':
+      if (GM.phase !== 'show') break;
+      if (GM.show.step < 3) {
+        const it = GM.show.items[GM.show.step++];
+        const what = `${it.kind === 'crib' ? 'crib' : 'hand'}`;
+        if (it.total) addPts(it.l, it.total, `counts ${it.total} in the ${what}`);
+        else addLog(`${gname(it.l)}: ${what} — nineteen (zero) 😬`);
+      } else { GM.dealer = 1 - GM.dealer; deal(); }
+      break;
+    case 'rematch':
+      if (GM.phase !== 'over') break;
+      Object.assign(GM, { gameId: uid(), scores: [0, 0], pegs: [[0, 0], [0, 0]], ms: 0, moves: [], winner: null, round: 0 });
+      GM.dealer = GM.nextDealer !== null ? GM.nextDealer : Math.random() < 0.5 ? 0 : 1;
+      addLog('New game!'); deal();
+      break;
+    case 'poke': if (pegs[a.p]) { bump(); say(pegs[a.p], 'poke', {}, 0, 3); pegs[a.p].sv = 0.4; } break;
+    case 'color': if (a.l === 0 || a.l === 1) baseSetColor(a.l, a.ci); GM.colors = S.colors.slice(0, 2); break;
+    case 'recast': baseCast(); GM.cast = S.cast.slice(); break;
+  }
+  commit();
+}
+function commit() {
+  GM.v++;
+  try { localStorage.setItem(HOST_KEY, JSON.stringify({ code: NET.code, GM, at: Date.now() })); } catch (e) {}
+  netSend('v/1', viewFor(1), true);
+  renderView(viewFor(0));
+}
+function viewFor(l) {
+  const o = 1 - l, sh = GM.show;
+  return { v: GM.v, gameId: GM.gameId, me: l, names: GM.names, phase: GM.phase, dealer: GM.dealer, round: GM.round,
+    hand: GM.hands[l], kept: GM.kept[l], oppCount: GM.phase === 'show' || GM.phase === 'over' ? 0 : GM.hands[o].length,
+    discarded: GM.discarded, cribCount: GM.crib.length, starter: GM.starter, pile: GM.pile, prevPile: GM.prevPile,
+    count: GM.count, turn: GM.turn, scores: GM.scores, pegs: GM.pegs, moves: GM.moves, ms: GM.ms, log: GM.log,
+    winner: GM.winner, acks: GM.acks, colors: GM.colors, cast: GM.cast,
+    show: sh ? { step: sh.step, items: sh.items.map((it, i) => i < sh.step ? it : { l: it.l, kind: it.kind }) } : null };
+}
+
+/* ---------- Network ---------- */
+function netConnect(code, onMsg) {
+  NET.code = code; NET.clients = [];
+  const base = TOPIC(code), me = NET.me;
+  if (!window.mqtt) { lobbyErr('Could not load the network library. Check the internet connection and reload.'); return; }
+  BROKERS.forEach((url, ci) => {
+    let c;
+    try {
+      c = mqtt.connect(url, { clientId: 'crib_' + uid(), clean: true, keepalive: 20, reconnectPeriod: 2000, connectTimeout: 9000,
+        will: { topic: `${base}/p/${me}`, payload: '0', retain: true, qos: 1 } });
+    } catch (e) { console.warn('[online] broker failed', url, e); return; }
+    c.on('connect', () => {
+      console.log('[online] connected to', url);
+      c.subscribe(`${base}/#`, { qos: 1 });
+      c.publish(`${base}/p/${me}`, '1', { retain: true, qos: 1 });
+      netStatus();
+      if (NET.onConnect) NET.onConnect();
+    });
+    ['close', 'offline', 'reconnect'].forEach(ev => c.on(ev, netStatus));
+    c.on('error', e => console.warn('[online]', url, e && e.message));
+    c.on('message', (topic, buf) => {
+      const sub = topic.slice(base.length + 1);
+      let d; try { d = JSON.parse(buf.toString()); } catch (e) { return; }
+      if (sub === `p/${1 - me}`) { NET.peer[ci] = d === 1; netStatus(); return; }
+      onMsg(sub, d);
+    });
+    NET.clients.push(c);
+  });
+}
+function netSend(sub, obj, retain) {
+  if (!NET.code) return;
+  const s = JSON.stringify(obj);
+  NET.clients.forEach(c => { if (c.connected) c.publish(`${TOPIC(NET.code)}/${sub}`, s, { qos: 1, retain: !!retain }); });
+}
+function netStatus() {
+  const pill = $('netPill'), up = NET.clients.some(c => c.connected), peer = Object.values(NET.peer).some(Boolean);
+  const other = VIEW ? VIEW.names[1 - NET.me] : NET.role === 'host' ? 'partner' : 'host';
+  pill.className = !up ? 'bad' : peer ? 'ok' : '';
+  pill.innerHTML = `<i></i>${!up ? 'Reconnecting…' : peer ? esc(other) : `${esc(other)} away`}`;
+}
+// Every action carries an id; the guest re-sends until the host's view acknowledges it.
+function netAct(a) {
+  a.id = uid();
+  if (NET.role === 'host') { hostAct(0, a); return; }
+  NET.pending.push({ a, at: Date.now() });
+  netSend('a', a);
+}
+setInterval(() => {
+  if (NET.role !== 'guest' || !NET.pending.length) return;
+  NET.pending = NET.pending.filter(p => Date.now() - p.at < 120000);
+  NET.pending.forEach(p => netSend('a', p.a));
+}, 3000);
+function netSpeech(p, text, mood, target) { netSend('s', { id: uid(), p: p.id, text, mood, t: target ? target.id : null }); }
+function pokePeg(peg) { if (NET.role === 'guest') netAct({ t: 'poke', p: peg.id }); else say(peg, 'poke', {}, 0, 3); }
+
+function hostMsg(sub, d) {
+  if (sub === 'a' && d && d.id) { if (NET.seen.has(d.id)) return; NET.seen.add(d.id); hostAct(1, d); }
+}
+function guestMsg(sub, d) {
+  if (sub === 'v/1' && d && d.v > NET.lastV) {
+    NET.lastV = d.v;
+    NET.pending = NET.pending.filter(p => !(d.acks || []).includes(p.a.id));
+    try { localStorage.setItem(GUEST_KEY, JSON.stringify({ code: NET.code, at: Date.now() })); } catch (e) {}
+    showGame();
+    renderView(d);
+  } else if (sub === 's' && d && d.id && !NET.seen.has(d.id)) {
+    NET.seen.add(d.id);
+    if (pegs[d.p]) speak(pegs[d.p], d.text, d.mood, d.t !== null ? pegs[d.t] : null);
+  }
+}
+
+/* ---------- Starting, joining, resuming ---------- */
+function myName() { const v = ($('nameIn') && $('nameIn').value.trim()) || ''; if (v) try { localStorage.setItem(NAME_KEY, v); } catch (e) {} return v; }
+function hostStart(resume) {
+  audio();
+  const name = resume ? null : myName();
+  if (!resume && !name) { lobbyErr('Type your name first'); return; }
+  NET.role = 'host'; NET.me = 0;
+  let code;
+  if (resume) { code = resume.code; GM = resume.GM; }
+  else {
+    code = Array.from(crypto.getRandomValues(new Uint32Array(4)), n => CODE_ABC[n % CODE_ABC.length]).join('');
+    GM = newMatch([name, 'Guest']);
+  }
+  NET.onConnect = () => { netSend('v/1', viewFor(1), true); };
+  netConnect(code, hostMsg);
+  enterOnline();
+  if (resume) { showGame(); commit(); }
+  else {
+    commit();
+    $('lcard').innerHTML = `<h2>Your code</h2><div class="bigcode">${code}</div>
+      <p class="sub">On the other phone, open this page, tap <b>Join</b> and enter the code.</p>
+      <p class="sub" id="lwait">Waiting for your partner…</p>
+      <button class="link" id="lcancel">Cancel</button>`;
+    $('lcancel').onclick = () => location.reload();
+  }
+}
+function guestJoin(code) {
+  audio();
+  const name = myName();
+  code = (code || '').toUpperCase().replace(/[^A-Z]/g, '');
+  if (!name) { lobbyErr('Type your name first'); return; }
+  if (code.length !== 4) { lobbyErr('The code is 4 letters'); return; }
+  NET.role = 'guest'; NET.me = 1; NET.lastV = 0;
+  NET.onConnect = () => netAct({ t: 'hello', name });
+  netConnect(code, guestMsg);
+  enterOnline();
+  if (S.voices) { S.voices = false; updateVoice(); }   // one phone talks; tap 🗣️ to hear them here too
+  $('lcard').innerHTML = `<h2>Joining</h2><div class="bigcode">${code}</div><p class="sub" id="lwait">Connecting…</p><button class="link" id="lcancel">Cancel</button>`;
+  $('lcancel').onclick = () => location.reload();
+  setTimeout(() => { const w = $('lwait'); if (w && !VIEW) w.textContent = `No game found yet with code ${code}. Is the host's page open? Still trying…`; }, 9000);
+}
+function enterOnline() {
+  document.body.classList.add('online');
+  if (S.n !== 2) { S.n = 2; S.holes = null; init(); }
+  save(); renderPlaques(); renderMatch(); netStatus();
+}
+function showGame() { $('lobby').classList.add('hide'); }
+
+/* ---------- Lobby ---------- */
+function lobbyErr(t) { const e = $('lerr'); if (e) e.textContent = t; else toast(t); }
+function readJSON(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } }
+function lobbyHome() {
+  let name = ''; try { name = localStorage.getItem(NAME_KEY) || ''; } catch (e) {}
+  const host = readJSON(HOST_KEY), guest = readJSON(GUEST_KEY), day = 864e5, now = Date.now();
+  const canResumeHost = host && host.GM && now - host.at < day;
+  const canRejoin = guest && guest.code && now - guest.at < day;
+  const hashCode = (location.hash.match(/join=([A-Za-z]{4})/) || [])[1] || '';
+  $('lcard').innerHTML = `<h2>Cribbage</h2><p class="sub">Two phones, private hands, one board.</p>
+    <label for="nameIn">Your name</label><input id="nameIn" maxlength="18" autocomplete="given-name" value="${esc(name)}" placeholder="Name">
+    ${canResumeHost ? `<button class="btn resume" id="lresH">Resume hosting ${host.code} · ${esc(host.GM.names[0])} ${host.GM.scores[0]} – ${esc(host.GM.names[1])} ${host.GM.scores[1]}</button>` : ''}
+    ${canRejoin ? `<button class="btn resume" id="lresG">Rejoin game ${guest.code}</button>` : ''}
+    <button class="btn" id="lhost">Host a new game</button>
+    <div class="or">— OR JOIN —</div>
+    <input id="joinCode" maxlength="4" autocapitalize="characters" autocomplete="off" placeholder="CODE" value="${hashCode}">
+    <button class="btn" id="ljoin">Join</button>
+    <div class="lerr" id="lerr"></div>
+    <button class="link" id="lboard">Just the board (playing with real cards)</button>`;
+  $('lhost').onclick = () => hostStart(null);
+  $('ljoin').onclick = () => guestJoin($('joinCode').value);
+  $('joinCode').addEventListener('keydown', e => { if (e.key === 'Enter') guestJoin($('joinCode').value); });
+  if (canResumeHost) $('lresH').onclick = () => hostStart(host);
+  if (canRejoin) $('lresG').onclick = () => guestJoin(guest.code);
+  $('lboard').onclick = () => {
+    audio(); showGame();
+    if (!pegs.some(p => holeN(p.hole) > 0)) setTimeout(() => toast('Grab a peg and drop it in a hole'), 400);
+    introBeat();
+  };
+}
+
+/* ---------- Rendering a view (both phones) ---------- */
+let VIEW = null, boardGame = null, boardMs = null, moveQ = [], qBusy = false, lastLogS = null, sel = [];
+function renderView(V) {
+  const prev = VIEW; VIEW = V;
+  if (!prev || prev.round !== V.round || prev.phase !== V.phase || prev.gameId !== V.gameId) sel = [];
+  syncMeta(V); syncBoard(V);
+  const fresh = V.log.filter(e => lastLogS !== null && e.s > lastLogS);
+  if (fresh.length) toast(fresh[fresh.length - 1].t);
+  lastLogS = V.log.length ? V.log[V.log.length - 1].s : 0;
+  if (prev && V.phase === 'peg' && V.turn === V.me && (prev.turn !== V.me || prev.phase !== 'peg')) {
+    try { navigator.vibrate && navigator.vibrate(25); } catch (e) {}
+  }
+  if (prev && V.pile.length > prev.pile.length) tock(0.5);
+  renderTable();
+  netStatus();
+}
+function syncMeta(V) {
+  let plaques = false;
+  if (S.names[0] !== V.names[0] || S.names[1] !== V.names[1]) { S.names[0] = V.names[0]; S.names[1] = V.names[1]; plaques = true; }
+  if (V.colors && (S.colors[0] !== V.colors[0] || S.colors[1] !== V.colors[1])) {
+    S.colors[0] = V.colors[0]; S.colors[1] = V.colors[1]; applyColors();
+  }
+  if (V.cast && V.cast.join() !== S.cast.join()) { S.cast = V.cast.slice(); castVoices = null; pegs.forEach(p => { p.lastLine = {}; }); plaques = true; }
+  if (plaques) { renderPlaques(); renderMatch(); save(); }
+}
+const holeKey = (l, n, i) => n <= 0 ? `${l}:s${i}` : n >= 121 ? 'game' : `${l}:${n}`;
+function snapPegs(P) {
+  for (let l = 0; l < 2; l++) {
+    const lp = pegs.filter(p => p.lane === l), want = P[l].slice().sort((a, b) => a - b);
+    const have = lp.map(p => holeN(p.hole)).sort((a, b) => a - b);
+    if (want[0] === have[0] && want[1] === have[1]) continue;
+    lp.forEach((p, i) => { pegLayer.appendChild(p.el); sendTo(p, holeKey(l, want[i], i), true); });
+  }
+  refreshPlaques(); refreshNerves(); save();
+}
+function syncBoard(V) {
+  if (boardGame !== V.gameId) {
+    const rematch = boardGame !== null;
+    boardGame = V.gameId; moveQ = [];
+    if (rematch || V.ms === 0) {
+      if (pegs.some(p => holeN(p.hole) > 0) || S.winner !== null) newGame();
+      boardMs = 0;
+    } else boardMs = null;
+    if (V.ms === 0) return;
+  }
+  if (boardMs === V.ms) return;
+  if (boardMs === null || !V.moves.length || V.moves[0].s > boardMs + 1) {   // first look at a game in progress, or missed moves
+    moveQ = []; snapPegs(V.pegs); boardMs = V.ms;
+    if (V.winner !== null && S.winner === null) { S.winner = V.winner; refreshNerves(); }
+    return;
+  }
+  V.moves.filter(m => m.s > boardMs).forEach(m => moveQ.push(m));
+  boardMs = V.ms;
+  if (!qBusy) runQ();
+}
+function runQ() {
+  const m = moveQ.shift();
+  if (!m) { qBusy = false; return; }
+  qBusy = true;
+  const lp = pegs.filter(p => p.lane === m.l), [b, f] = m.to;
+  const stay = lp.find(p => holeN(p.hole) === b), mover = lp.find(p => p !== stay);
+  const key = f >= 121 ? 'game' : `${m.l}:${f}`;
+  if (!stay || !mover || occupied(key, mover)) { moveQ = []; snapPegs(VIEW.pegs); qBusy = false; return; }
+  if (holeN(mover.hole) !== f) {
+    const before = laneScore(m.l), from = mover.hole;
+    pick();
+    pegLayer.appendChild(mover.el);
+    sendTo(mover, key, false);
+    afterMove(mover, before, from);
+  }
+  setTimeout(runQ, moveQ.length ? 1100 : 0);
+}
+
+function renderTable() {
+  const V = VIEW, me = V.me, o = 1 - me;
+  const nm = l => esc(V.names[l] || (l ? 'Guest' : 'Host'));
+  const whose = l => l === me ? 'your' : `${nm(l)}’s`;
+  $('oppWho').innerHTML = `<b>${nm(o)}</b>${V.dealer === o ? ' · dealer' : ''}${V.oppCount ? ` · ${V.oppCount} card${V.oppCount > 1 ? 's' : ''}` : ''}`;
+  $('oppBacks').innerHTML = backsHtml(V.oppCount, 'xs');
+  const cutter = V.phase === 'cut' && me !== V.dealer;
+  $('deckSlot').innerHTML = V.starter !== null ? cardHtml(V.starter, 'sm starter') : `<div class="deck ${cutter ? 'can' : ''}" id="deck">${backsHtml(1, 'sm')}</div>`;
+  $('deckCap').textContent = V.starter !== null ? 'Starter' : cutter ? 'Tap to cut' : 'Deck';
+  $('crib').innerHTML = V.cribCount ? backsHtml(V.cribCount, 'xs') : '';
+  $('cribCap').textContent = `${V.dealer === me ? 'Your' : V.names[V.dealer] + '’s'} crib`;
+  const pegging = V.phase === 'peg';
+  $('pile').innerHTML = V.pile.map((x, i) => cardHtml(x.c, `sm ${x.by === me ? 'mine' : 'theirs'} ${i === V.pile.length - 1 ? 'new' : ''}`)).join('');
+  $('count').innerHTML = pegging || V.pile.length ? `${V.count}<small>COUNT</small>` : '';
+  $('prev').innerHTML = pegging && V.prevPile.length ? V.prevPile.map(x => cardHtml(x.c, 'xs')).join('') : '';
+
+  // the show
+  const box = $('showBox');
+  if (V.show && (V.phase === 'show' || V.phase === 'over')) {
+    box.classList.add('on');
+    box.innerHTML = V.show.items.map((it, i) => {
+      const c = col(it.l), label = `${it.l === me ? 'Your' : nm(it.l) + '’s'} ${it.kind}`;
+      if (i >= V.show.step) return `<div class="shw wait" style="--c:${c.base}"><div class="info"><div class="ttl">${label}</div><ul><li>not counted yet</li></ul></div></div>`;
+      const cards = it.cards.slice().sort(byRank).map(x => cardHtml(x, 'xs')).join('') + cardHtml(V.starter, 'xs starter');
+      const lines = it.parts.length ? it.parts.map(([t, n]) => `<li>${esc(t)} — ${n}</li>`).join('') : '<li>Nineteen (nothing) 😬</li>';
+      return `<div class="shw" style="--c:${c.base}"><div class="cards">${cards}</div><div class="info"><div class="ttl">${label}</div><ul>${lines}</ul></div><div class="stot">${it.total}</div></div>`;
+    }).join('');
+  } else { box.classList.remove('on'); box.innerHTML = ''; }
+
+  // status line
+  let st = '', mine = false;
+  switch (V.phase) {
+    case 'lobby': st = 'Waiting for your partner…'; break;
+    case 'discard':
+      if (!V.discarded[me]) { st = `Pick 2 cards for ${whose(V.dealer)} crib`; mine = true; }
+      else st = `Waiting for ${nm(o)} to discard…`;
+      break;
+    case 'cut': st = cutter ? 'Cut the deck' : `${nm(o)} is cutting…`; mine = cutter; break;
+    case 'peg': st = V.turn === me ? 'Your turn' : `${nm(o)}’s turn…`; mine = V.turn === me; break;
+    case 'show': st = V.show.step < 3 ? 'Count the hands' : 'All counted'; mine = true; break;
+    case 'over': st = V.winner === me ? 'You win! 🎉' : `${nm(V.winner)} wins`; break;
+  }
+  $('status').textContent = st;
+  $('status').classList.toggle('myturn', mine);
+  $('lastlog').textContent = V.log.length ? V.log[V.log.length - 1].t : '';
+
+  // my hand
+  let cards, pickable = () => false;
+  if (V.phase === 'discard' && !V.discarded[me]) { cards = V.hand.slice(); pickable = () => true; }
+  else if (V.phase === 'peg') {
+    cards = V.kept.slice();
+    pickable = c => V.turn === me && V.hand.includes(c) && V.count + val(c) <= 31;
+  } else cards = (V.kept.length ? V.kept : V.hand).slice();
+  cards.sort(byRank);
+  sel = sel.filter(c => cards.includes(c) && pickable(c));
+  $('hand').innerHTML = cards.map(c => {
+    const gone = V.phase === 'peg' && !V.hand.includes(c);
+    const dim = gone || (V.phase === 'peg' && V.turn === me && !pickable(c));
+    return cardHtml(c, `${sel.includes(c) ? 'sel' : ''} ${dim ? 'dim' : ''} ${gone ? 'gone' : ''}`);
+  }).join('');
+
+  // actions
+  let acts = '';
+  if (V.phase === 'discard' && !V.discarded[me]) acts = `<button class="btn" data-a="discard" ${sel.length === 2 ? '' : 'disabled'}>Send to ${V.dealer === me ? 'my' : esc(V.names[V.dealer]) + '’s'} crib</button>`;
+  else if (cutter) acts = `<button class="btn" data-a="cut">Cut the deck</button>`;
+  else if (pegging && V.turn === me) acts = `<button class="btn" data-a="play" ${sel.length === 1 ? '' : 'disabled'}>${sel.length ? `Play ${cardName(sel[0])} → ${V.count + val(sel[0])}` : 'Tap a card to play'}</button>`;
+  else if (V.phase === 'show') {
+    const nx = V.show.items[V.show.step];
+    acts = nx ? `<button class="btn" data-a="next">Count ${nx.l === me ? 'your' : esc(V.names[nx.l]) + '’s'} ${nx.kind}</button>` : `<button class="btn" data-a="next">Next deal →</button>`;
+  } else if (V.phase === 'over') acts = `<button class="btn" data-a="rematch">Rematch</button>`;
+  $('acts').innerHTML = acts;
+}
+function act(a) {
+  const V = VIEW; if (!V) return;
+  audio();
+  if (a === 'discard' && sel.length === 2) { netAct({ t: 'discard', cards: sel.slice() }); sel = []; }
+  else if (a === 'cut') netAct({ t: 'cut' });
+  else if (a === 'play' && sel.length === 1) { netAct({ t: 'play', c: sel[0] }); sel = []; }
+  else if (a === 'next') netAct({ t: 'next' });
+  else if (a === 'rematch') { hideWin(); netAct({ t: 'rematch' }); }
+  renderTable();
+}
+$('acts').addEventListener('click', e => { const b = e.target.closest('[data-a]'); if (b && !b.disabled) { tock(0.5); act(b.dataset.a); } });
+$('deckSlot').addEventListener('click', e => { if (e.target.closest('.deck.can')) { tock(0.6); act('cut'); } });
+$('hand').addEventListener('click', e => {
+  const el = e.target.closest('.card'), V = VIEW; if (!el || !V) return;
+  const c = +el.dataset.c;
+  audio();
+  if (V.phase === 'discard' && !V.discarded[me()]) {
+    if (sel.includes(c)) sel = sel.filter(x => x !== c);
+    else { sel.push(c); if (sel.length > 2) sel.shift(); }
+    tick();
+  } else if (V.phase === 'peg' && V.turn === me() && V.hand.includes(c)) {
+    if (V.count + val(c) > 31) { toast(`That would make ${V.count + val(c)} — over 31`); return; }
+    if (sel[0] === c) { act('play'); return; }        // tap a raised card again to play it
+    sel = [c]; tick();
+  } else return;
+  renderTable();
+});
+const me = () => VIEW ? VIEW.me : 0;
+
+/* ---------- Hooks into the board ---------- */
+const baseSetColor = setColor;
+setColor = function (l, ci) {
+  if (NET.role === 'guest') { netAct({ t: 'color', l, ci }); closePicker(); return; }
+  baseSetColor(l, ci);
+  if (NET.role === 'host' && GM) { GM.colors = S.colors.slice(0, 2); commit(); }
+};
+const baseCast = $('castBtn').onclick;
+$('castBtn').onclick = () => {
+  if (NET.role === 'guest') { netAct({ t: 'recast' }); toast('Recasting…'); return; }
+  baseCast();
+  if (NET.role === 'host' && GM) { GM.cast = S.cast.slice(); commit(); }
+};
+const baseRematch = $('rematchBtn').onclick;
+$('rematchBtn').onclick = () => { if (NET.role) act('rematch'); else baseRematch(); };
+$('menuBtn').onclick = e => { e.stopPropagation(); audio(); document.querySelector('header .bar').classList.toggle('open'); };
+document.addEventListener('click', e => { const bar = document.querySelector('header .bar'); if (!bar.contains(e.target) && !picker.contains(e.target)) bar.classList.remove('open'); });
+$('leaveBtn').onclick = () => { if (confirm('Leave this game? You can rejoin or resume it from the start screen.')) location.reload(); };
+document.addEventListener('visibilitychange', () => {   // phones drop sockets in the background: nudge a reconnect on return
+  if (document.visibilityState === 'visible') NET.clients.forEach(c => { if (!c.connected) try { c.reconnect(); } catch (e) {} });
+});
+function onlineBoot() { lobbyHome(); }
+
+onlineBoot();
+</script>
+</body>
+</html>
