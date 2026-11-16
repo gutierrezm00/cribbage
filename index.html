@@ -308,6 +308,10 @@ body.online #match{margin-bottom:20px}
 body.online #leaveBtn{display:inline-block}
 body.online #newBtn{display:none}
 .hand .card.gone{display:none}
+/* the chat strip keeps a fixed height so lines coming and going never shift the table */
+.talkbar{height:110px;min-height:0;overflow:hidden;justify-content:flex-end}
+body.online .talkbar{height:92px}
+.talkbar{-webkit-mask-image:linear-gradient(transparent,#000 16px);mask-image:linear-gradient(transparent,#000 16px)}
 </style>
 </head>
 <body>
