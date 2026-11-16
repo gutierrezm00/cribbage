@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#0f3a27">
-<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script src="mqtt.min.js"></script><script src="jsQR.js"></script><script src="qrcode.js"></script>
 <title>Cribbage</title>
 <style>
 *{box-sizing:border-box}
@@ -321,6 +321,13 @@ body.online .talkbar{height:92px}
 .backs .card{margin-left:-22px}
 .pile .card{margin-left:-24px}
 .shw .cards .card{margin-left:-18px}
+.qr{background:#fff;border-radius:12px;padding:6px;margin:6px auto 10px;width:min(330px,100%)}
+.qr svg{display:block;width:100%;height:auto}
+#lcam video{width:100%;border-radius:12px;margin-top:10px;background:#000;max-height:50vh;object-fit:cover}
+.tip{font-size:12px !important;color:#8a7658 !important;margin-top:10px !important}
+.two{display:flex;gap:8px}.two .btn{font-size:13px}
+#cover{position:fixed;inset:0;z-index:19;display:none;place-items:center;padding:16px;background:radial-gradient(ellipse at 50% 30%,var(--f1),var(--f2) 60%,var(--f3))}
+#cover.show{display:grid}
 </style>
 </head>
 <body>
@@ -2119,7 +2126,8 @@ function hostAct(l, a) {
 }
 function commit() {
   GM.v++;
-  try { localStorage.setItem(HOST_KEY, JSON.stringify({ code: NET.code, GM, at: Date.now() })); } catch (e) {}
+  try { localStorage.setItem(NET.role === 'local' ? LOCAL_KEY : HOST_KEY, JSON.stringify({ code: NET.code, GM, at: Date.now() })); } catch (e) {}
+  if (NET.role === 'local') { const need = needLane(); if (need !== NET.me) { NET.me = need; passTo(need); } renderView(viewFor(NET.me)); return; }
   netSend('v/1', viewFor(1), true);
   renderView(viewFor(0));
 }
@@ -2164,13 +2172,15 @@ function netConnect(code, onMsg) {
   });
 }
 function netSend(sub, obj, retain) {
+  if (LINK.dc) { if (LINK.dc.readyState === 'open') LINK.dc.send(JSON.stringify({ sub, d: obj })); return; }
   if (!NET.code) return;
   const s = JSON.stringify(obj);
   NET.clients.forEach(c => { if (c.connected) c.publish(`${TOPIC(NET.code)}/${sub}`, s, { qos: 1, retain: !!retain }); });
 }
 function netStatus() {
-  const pill = $('netPill'), up = NET.clients.some(c => c.connected), peer = Object.values(NET.peer).some(Boolean);
+  const pill = $('netPill'), up = NET.clients.some(c => c.connected) || (LINK.dc && LINK.dc.readyState === 'open'), peer = Object.values(NET.peer).some(Boolean);
   const other = VIEW ? VIEW.names[1 - NET.me] : NET.role === 'host' ? 'partner' : 'host';
+  if (NET.role === 'local') { pill.className = 'ok'; pill.innerHTML = '<i></i>One phone'; return; }
   pill.className = !up ? 'bad' : peer ? 'ok' : '';
   pill.innerHTML = `<i></i>${!up ? 'Reconnecting…' : peer ? esc(other) : `${esc(other)} away`}`;
   const r = $('lrelay'), n = NET.clients.filter(c => c.connected).length;
@@ -2179,7 +2189,7 @@ function netStatus() {
 // Every action carries an id; the guest re-sends until the host's view acknowledges it.
 function netAct(a) {
   a.id = uid();
-  if (NET.role === 'host') { hostAct(0, a); return; }
+  if (NET.role !== 'guest') { hostAct(NET.role === 'local' ? NET.me : 0, a); return; }
   NET.pending.push({ a, at: Date.now() });
   netSend('a', a);
 }
@@ -2263,6 +2273,7 @@ function lobbyHome() {
   const host = readJSON(HOST_KEY), guest = readJSON(GUEST_KEY), day = 864e5, now = Date.now();
   const canResumeHost = host && host.GM && now - host.at < day;
   const canRejoin = guest && guest.code && now - guest.at < day;
+  const local = readJSON(LOCAL_KEY), canLocal = local && local.GM && now - local.at < 3 * day;
   const hashCode = (location.hash.match(/join=([A-Za-z]{4})/) || [])[1] || '';
   $('lcard').innerHTML = `<h2>Cribbage</h2><p class="sub">Two phones, private hands, one board.</p>
     <label for="nameIn">Your name</label><input id="nameIn" maxlength="18" autocomplete="given-name" value="${esc(name)}" placeholder="Name">
@@ -2273,12 +2284,24 @@ function lobbyHome() {
     <input id="joinCode" maxlength="4" autocapitalize="characters" autocomplete="off" placeholder="CODE" value="${hashCode}">
     <button class="btn" id="ljoin">Join</button>
     <div class="lerr" id="lerr"></div>
+    <div class="or">— NO INTERNET? —</div>
+    ${canResumeHost ? `<button class="btn resume" id="llinkR">Resume ${host.GM.scores[0]}–${host.GM.scores[1]} via phone link</button>` : ''}
+    <div class="two"><button class="btn" id="llinkH">Host via phone link</button><button class="btn" id="llinkJ">Join via phone link</button></div>
+    ${canLocal ? `<button class="btn resume" id="llocalR">Resume pass-and-play · ${esc(local.GM.names[0])} ${local.GM.scores[0]} – ${esc(local.GM.names[1])} ${local.GM.scores[1]}</button>` : ''}
+    <button class="btn" id="llocal">Pass-and-play on one phone</button>
+    <p class="sub" id="loffline"></p>
     <button class="link" id="lboard">Just the board (playing with real cards)</button>`;
   $('lhost').onclick = () => hostStart(null);
   $('ljoin').onclick = () => guestJoin($('joinCode').value);
   $('joinCode').addEventListener('keydown', e => { if (e.key === 'Enter') guestJoin($('joinCode').value); });
   if (canResumeHost) $('lresH').onclick = () => hostStart(host);
   if (canRejoin) $('lresG').onclick = () => guestJoin(guest.code);
+  $('llinkH').onclick = () => linkHost(null);
+  $('llinkJ').onclick = () => linkJoin();
+  $('llocal').onclick = () => localStart(null);
+  if (canResumeHost) $('llinkR').onclick = () => linkHost(host);
+  if (canLocal) $('llocalR').onclick = () => localStart(local);
+  if (navigator.serviceWorker) navigator.serviceWorker.ready.then(() => { const o = $('loffline'); if (o) o.textContent = '✓ Saved on this phone, so it opens in airplane mode'; });
   $('lboard').onclick = () => {
     audio(); showGame();
     if (!pegs.some(p => holeN(p.hole) > 0)) setTimeout(() => toast('Grab a peg and drop it in a hole'), 400);
@@ -2482,7 +2505,186 @@ $('leaveBtn').onclick = () => { if (confirm('Leave this game? You can rejoin or 
 document.addEventListener('visibilitychange', () => {   // phones drop sockets in the background: nudge a reconnect on return
   if (document.visibilityState === 'visible') NET.clients.forEach(c => { if (!c.connected) try { c.reconnect(); } catch (e) {} });
 });
-function onlineBoot() { lobbyHome(); }
+function onlineBoot() {
+  lobbyHome();
+  if ('serviceWorker' in navigator && isSecureContext) navigator.serviceWorker.register('sw.js').catch(e => console.warn('[offline]', e));
+}
+
+/* ---------- Phone link: no internet, the phones talk directly over a hotspot ---------- */
+// Pairing swaps WebRTC descriptions by QR code (host shows, guest scans; guest shows, host scans), so no
+// server is involved at all. Camera permission also makes browsers reveal real local addresses instead of
+// .local names, which is what lets two phones on a bare hotspot find each other.
+const LINK = { pc: null, dc: null, stream: null, scanT: null };
+const b64u = u8 => { let s = ''; u8.forEach(b => { s += String.fromCharCode(b); }); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
+const unb64u = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+async function packSdp(desc) {
+  const sdp = desc.sdp.split('\r\n').filter(l => !/^a=candidate:.* tcp /i.test(l)).join('\r\n');
+  const t = JSON.stringify({ t: desc.type, s: sdp });
+  if (window.CompressionStream) {
+    const buf = await new Response(new Blob([t]).stream().pipeThrough(new CompressionStream('deflate-raw'))).arrayBuffer();
+    return 'CRIB:Z' + b64u(new Uint8Array(buf));
+  }
+  return 'CRIB:J' + b64u(new TextEncoder().encode(t));
+}
+async function unpackSdp(str) {
+  const kind = str[5], bytes = unb64u(str.slice(6));
+  const txt = kind === 'Z' ? await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text() : new TextDecoder().decode(bytes);
+  const o = JSON.parse(txt);
+  return { type: o.t, sdp: o.s };
+}
+function newPc() {
+  const pc = new RTCPeerConnection({ iceServers: [] });
+  pc.onconnectionstatechange = () => { console.log('[link]', pc.connectionState); netStatus(); };
+  LINK.pc = pc;
+  return pc;
+}
+const gathered = pc => new Promise(r => {
+  if (pc.iceGatheringState === 'complete') return r();
+  const t = setTimeout(r, 3000);
+  pc.addEventListener('icegatheringstatechange', () => { if (pc.iceGatheringState === 'complete') { clearTimeout(t); r(); } });
+});
+function wireDc(dc, onMsg) {
+  LINK.dc = dc;
+  dc.onopen = () => { console.log('[link] open'); NET.peer = { link: true }; netStatus(); if (NET.onConnect) NET.onConnect(); };
+  dc.onclose = () => { NET.peer = {}; netStatus(); toast('Phone link lost. ☰ → Leave, then pair again (the game is saved).'); };
+  dc.onmessage = e => { let m; try { m = JSON.parse(e.data); } catch (x) { return; } onMsg(m.sub, m.d); };
+}
+async function camOn() {
+  if (!LINK.stream) LINK.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+  return LINK.stream;
+}
+function camOff() { clearInterval(LINK.scanT); if (LINK.stream) LINK.stream.getTracks().forEach(t => t.stop()); LINK.stream = null; }
+// Show the camera in the lobby card until it reads one of our codes.
+async function scanCode(host) {
+  host.innerHTML = '<video id="camv" playsinline muted autoplay></video>';
+  const v = $('camv'), stream = await camOn();
+  v.srcObject = stream;
+  try { await v.play(); } catch (e) {}
+  const cv = document.createElement('canvas'), cx = cv.getContext('2d', { willReadFrequently: true });
+  return new Promise(res => {
+    clearInterval(LINK.scanT);
+    LINK.scanT = setInterval(() => {
+      if (!v.videoWidth) return;
+      const k = Math.min(1, 720 / Math.max(v.videoWidth, v.videoHeight));
+      cv.width = Math.round(v.videoWidth * k); cv.height = Math.round(v.videoHeight * k);
+      cx.drawImage(v, 0, 0, cv.width, cv.height);
+      const q = jsQR(cx.getImageData(0, 0, cv.width, cv.height).data, cv.width, cv.height, { inversionAttempts: 'dontInvert' });
+      if (q && q.data.startsWith('CRIB:')) { clearInterval(LINK.scanT); try { navigator.vibrate && navigator.vibrate(40); } catch (e) {} tock(0.8); res(q.data); }
+    }, 220);
+  });
+}
+function qrSvg(text) {
+  const q = qrcode(0, 'L'); q.addData(text, 'Byte'); q.make();
+  return q.createSvgTag({ cellSize: 4, margin: 3, scalable: true });
+}
+function linkFail(e) {
+  console.warn('[link]', e);
+  const msg = e && e.name === 'NotAllowedError' ? 'The camera is needed to scan the other phone. Allow it in the browser settings and try again.' : `Pairing failed: ${e && e.message || e}`;
+  $('lcard').insertAdjacentHTML('beforeend', `<div class="lerr">${esc(msg)}</div>`);
+}
+const LINK_TIP = '<p class="sub tip">Both phones on the same hotspot or Wi-Fi (no internet needed). On a plane: her Android hotspot on, your iPhone joined to it.</p>';
+async function linkHost(resume) {
+  audio();
+  const name = resume ? null : myName();
+  if (!resume && !name) { lobbyErr('Type your name first'); return; }
+  NET.role = 'host'; NET.me = 0;
+  GM = resume ? resume.GM : newMatch([name, 'Guest']);
+  enterOnline();
+  $('lcard').innerHTML = `<h2>Phone link</h2><p class="sub">Getting ready…</p>${LINK_TIP}`;
+  try {
+    await camOn();                                   // ask for the camera up front (see the note above)
+    const pc = newPc();
+    wireDc(pc.createDataChannel('crib', { ordered: true }), hostMsg);
+    NET.onConnect = () => { camOff(); showGame(); commit(); };
+    await pc.setLocalDescription(await pc.createOffer());
+    await gathered(pc);
+    const code = await packSdp(pc.localDescription);
+    console.log('[link] offer code', code.length, 'chars');
+    $('lcard').innerHTML = `<h2>Phone link</h2>
+      <p class="sub"><b>1.</b> On the other phone: <b>Join via phone link</b>, then point it at this code.</p>
+      <div class="qr">${qrSvg(code)}</div>
+      <button class="btn" id="lscan">2. Now scan their code</button>
+      <div id="lcam"></div>${LINK_TIP}<button class="link" id="lcancel">Cancel</button>`;
+    $('lcancel').onclick = () => location.reload();
+    window.__linkOffer = code;
+    const answer = new Promise(res => { window.__linkAnswer = res; $('lscan').onclick = async () => {
+      $('lscan').remove(); document.querySelector('.qr').remove();
+      try { res(await scanCode($('lcam'))); } catch (e) { linkFail(e); }
+    }; });
+    const ans = await answer;
+    camOff();
+    $('lcam').innerHTML = '<p class="sub">Connecting…</p>';
+    await pc.setRemoteDescription(await unpackSdp(ans));
+    setTimeout(() => { if (!LINK.dc || LINK.dc.readyState !== 'open') linkFail(new Error('the phones can’t reach each other. Are both on the same hotspot?')); }, 12000);
+  } catch (e) { linkFail(e); }
+}
+async function linkJoin() {
+  audio();
+  const name = myName();
+  if (!name) { lobbyErr('Type your name first'); return; }
+  NET.role = 'guest'; NET.me = 1; NET.lastV = 0;
+  enterOnline();
+  if (S.voices) { S.voices = false; updateVoice(); }
+  $('lcard').innerHTML = `<h2>Phone link</h2><p class="sub"><b>1.</b> Point the camera at the host’s code.</p><div id="lcam"></div>${LINK_TIP}<button class="link" id="lcancel">Cancel</button>`;
+  $('lcancel').onclick = () => location.reload();
+  try {
+    const offerP = new Promise(async (res, rej) => { window.__linkScan = res; try { res(await scanCode($('lcam'))); } catch (e) { rej(e); } });
+    const offer = await offerP;
+    camOff();
+    const pc = newPc();
+    pc.ondatachannel = e => wireDc(e.channel, guestMsg);
+    NET.onConnect = () => netAct({ t: 'hello', name });
+    await pc.setRemoteDescription(await unpackSdp(offer));
+    await pc.setLocalDescription(await pc.createAnswer());
+    await gathered(pc);
+    const code = await packSdp(pc.localDescription);
+    window.__linkAnswerCode = code;
+    $('lcard').innerHTML = `<h2>Phone link</h2><p class="sub"><b>2.</b> Now let the host scan this code.</p><div class="qr">${qrSvg(code)}</div>
+      <p class="sub" id="lwait">Waiting for the host…</p>${LINK_TIP}<button class="link" id="lcancel">Cancel</button>`;
+    $('lcancel').onclick = () => location.reload();
+  } catch (e) { linkFail(e); }
+}
+
+/* ---------- Pass-and-play: one phone, handed back and forth ---------- */
+const LOCAL_KEY = 'crib-local';
+function localStart(resume) {
+  audio();
+  let names;
+  if (!resume) {
+    const a = myName();
+    if (!a) { lobbyErr('Type your name first'); return; }
+    let b = ''; try { b = localStorage.getItem('crib-local-other') || ''; } catch (e) {}
+    b = (prompt('Who are you playing against?', b) || '').trim().slice(0, 18);
+    if (!b) return;
+    try { localStorage.setItem('crib-local-other', b); } catch (e) {}
+    names = [a, b];
+  }
+  NET.role = 'local';
+  GM = resume ? resume.GM : newMatch(names);
+  enterOnline();
+  if (GM.phase === 'lobby') deal();
+  NET.me = needLane();
+  showGame();
+  passTo(NET.me, true);
+  commit();
+}
+function needLane() {
+  switch (GM.phase) {
+    case 'discard': { const nd = 1 - GM.dealer; return !GM.discarded[nd] ? nd : !GM.discarded[GM.dealer] ? GM.dealer : NET.me; }
+    case 'cut': return 1 - GM.dealer;
+    case 'peg': return GM.turn;
+    default: return NET.me;
+  }
+}
+// A cover screen hides the hand while the phone changes hands.
+function passTo(l, first) {
+  let el = $('cover');
+  if (!el) { el = document.createElement('div'); el.id = 'cover'; document.body.appendChild(el); }
+  el.innerHTML = `<div class="lcard"><h2>${first ? '' : 'Pass to '}${esc(GM.names[l])}</h2><p class="sub">${first ? 'Your hand is next.' : 'No peeking 🙈'}</p>
+    <button class="btn" id="coverGo">I’m ${esc(GM.names[l])}, show my cards</button></div>`;
+  el.classList.add('show');
+  $('coverGo').onclick = () => { audio(); tock(0.6); el.classList.remove('show'); };
+}
 
 onlineBoot();
 </script>
