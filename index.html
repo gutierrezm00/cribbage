@@ -1925,7 +1925,9 @@ requestAnimationFrame(frame);
 // Transport: MQTT over secure WebSockets through two public brokers at once. That gets through airport and
 // hotel Wi-Fi where peer-to-peer links often can't. The host phone runs the game; the guest phone is only
 // ever sent its own cards. Every message is deduplicated, so the two brokers never double anything.
-const BROKERS = ['wss://broker.hivemq.com:8884/mqtt', 'wss://broker.emqx.io:8084/mqtt'];
+// shiftr.io runs on port 443 (the normal web port), so it gets through Wi-Fi that blocks the others' ports.
+const BROKERS = [{ url: 'wss://public.cloud.shiftr.io:443', username: 'public', password: 'public' },
+  { url: 'wss://broker.hivemq.com:8884/mqtt' }, { url: 'wss://broker.emqx.io:8084/mqtt' }, { url: 'wss://test.mosquitto.org:8081' }];
 const TOPIC = code => `ovbcrib/v1/${code}`;
 const HOST_KEY = 'crib-online-host', GUEST_KEY = 'crib-online-guest', NAME_KEY = 'crib-online-name';
 const CODE_ABC = 'ABCDEFGHJKMNPQRSTUVWXYZ';
@@ -2123,10 +2125,11 @@ function netConnect(code, onMsg) {
   NET.code = code; NET.clients = [];
   const base = TOPIC(code), me = NET.me;
   if (!window.mqtt) { lobbyErr('Could not load the network library. Check the internet connection and reload.'); return; }
-  BROKERS.forEach((url, ci) => {
+  BROKERS.forEach((b, ci) => {
+    const url = b.url;
     let c;
     try {
-      c = mqtt.connect(url, { clientId: 'crib_' + uid(), clean: true, keepalive: 20, reconnectPeriod: 2000, connectTimeout: 9000,
+      c = mqtt.connect(url, { username: b.username, password: b.password, clientId: 'crib_' + uid(), clean: true, keepalive: 20, reconnectPeriod: 2000, connectTimeout: 9000,
         will: { topic: `${base}/p/${me}`, payload: '0', retain: true, qos: 1 } });
     } catch (e) { console.warn('[online] broker failed', url, e); return; }
     c.on('connect', () => {
@@ -2157,6 +2160,8 @@ function netStatus() {
   const other = VIEW ? VIEW.names[1 - NET.me] : NET.role === 'host' ? 'partner' : 'host';
   pill.className = !up ? 'bad' : peer ? 'ok' : '';
   pill.innerHTML = `<i></i>${!up ? 'Reconnecting…' : peer ? esc(other) : `${esc(other)} away`}`;
+  const r = $('lrelay'), n = NET.clients.filter(c => c.connected).length;
+  if (r) r.textContent = `Relays connected: ${n} of ${BROKERS.length}${peer ? ' · partner found' : ''}`;
 }
 // Every action carries an id; the guest re-sends until the host's view acknowledges it.
 function netAct(a) {
@@ -2210,7 +2215,7 @@ function hostStart(resume) {
     commit();
     $('lcard').innerHTML = `<h2>Your code</h2><div class="bigcode">${code}</div>
       <p class="sub">On the other phone, open this page, tap <b>Join</b> and enter the code.</p>
-      <p class="sub" id="lwait">Waiting for your partner…</p>
+      <p class="sub" id="lwait">Waiting for your partner…</p><p class="sub" id="lrelay">Connecting…</p>
       <button class="link" id="lcancel">Cancel</button>`;
     $('lcancel').onclick = () => location.reload();
   }
@@ -2226,7 +2231,7 @@ function guestJoin(code) {
   netConnect(code, guestMsg);
   enterOnline();
   if (S.voices) { S.voices = false; updateVoice(); }   // one phone talks; tap 🗣️ to hear them here too
-  $('lcard').innerHTML = `<h2>Joining</h2><div class="bigcode">${code}</div><p class="sub" id="lwait">Connecting…</p><button class="link" id="lcancel">Cancel</button>`;
+  $('lcard').innerHTML = `<h2>Joining</h2><div class="bigcode">${code}</div><p class="sub" id="lwait">Connecting…</p><p class="sub" id="lrelay"></p><button class="link" id="lcancel">Cancel</button>`;
   $('lcancel').onclick = () => location.reload();
   setTimeout(() => { const w = $('lwait'); if (w && !VIEW) w.textContent = `No game found yet with code ${code}. Is the host's page open? Still trying…`; }, 9000);
 }
