@@ -312,6 +312,15 @@ body.online #newBtn{display:none}
 .talkbar{height:110px;min-height:0;overflow:hidden;justify-content:flex-end}
 body.online .talkbar{height:92px}
 .talkbar{-webkit-mask-image:linear-gradient(transparent,#000 16px);mask-image:linear-gradient(transparent,#000 16px)}
+/* bigger cards: the hand overlaps like a real fan so six fit across a phone */
+.hand{min-height:calc(min(104px,27vw) * 1.4 + 22px)}
+.hand .card{--cw:min(104px,27vw);margin-left:min(-10px,calc((100vw - 28px - var(--cw)) / max(1, var(--n, 6) - 1) - var(--cw)))}
+.hand .card .cr{font-size:calc(var(--cw) * .26)}
+.card.sm{--cw:54px}
+.card.xs{--cw:40px}
+.backs .card{margin-left:-22px}
+.pile .card{margin-left:-24px}
+.shw .cards .card{margin-left:-18px}
 </style>
 </head>
 <body>
@@ -2405,6 +2414,7 @@ function renderTable() {
   } else cards = (V.kept.length ? V.kept : V.hand).slice();
   cards.sort(byRank);
   sel = sel.filter(c => cards.includes(c) && pickable(c));
+  $('hand').style.setProperty('--n', Math.max(2, cards.filter(c => !(V.phase === 'peg' && !V.hand.includes(c))).length));
   $('hand').innerHTML = cards.map(c => {
     const gone = V.phase === 'peg' && !V.hand.includes(c);
     const dim = gone || (V.phase === 'peg' && V.turn === me && !pickable(c));
